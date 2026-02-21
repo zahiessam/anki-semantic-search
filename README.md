@@ -2,6 +2,8 @@
 
 Semantic search over your Anki notes with AI-generated answers. Find relevant cards by meaning, not just keywords.
 
+Mainly used with [AnKing Overhaul](https://www.ankingmed.com/) and [AnkiHub](https://ankihub.net/) syncing.
+
 ## Quick Start
 
 1. **Install** the add-on via AnkiWeb or by placing the add-on folder in your Anki addons directory.

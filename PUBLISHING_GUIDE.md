@@ -5,7 +5,7 @@
 Use this when creating/editing your add-on on [AnkiWeb](https://ankiweb.net):
 
 ```markdown
-**Search your Anki notes by meaning, not just keywords.** Find relevant cards with AI-powered semantic search and get answers generated from your own notes.
+**Search your Anki notes by meaning, not just keywords.** Find relevant cards with AI-powered semantic search and get answers generated from your own notes. Mainly used with AnKing Overhaul and AnkiHub syncing.
 
 ## Features
 
