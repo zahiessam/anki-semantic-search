@@ -24,7 +24,7 @@ Use this when creating/editing your add-on on [AnkiWeb](https://ankiweb.net):
 
 ## Requirements
 
-- Anki 2.1.66+ (tested on 25.09.2)
+- Anki 25.09.2 (tested on this version)
 - Embedding engine: Ollama (local) or Voyage/OpenAI/Cohere (API keys)
 - AI provider: Ollama (local) or OpenAI/Anthropic (API keys)
 
@@ -111,9 +111,20 @@ git push -u origin main
 
 - **Name:** Anki Semantic Search
 - **Description:** Copy the AnkiWeb description from above
-- **Source code:** `https://github.com/YOUR_USERNAME/anki-ai-semantic-search`
+- **Source code:** `https://github.com/zahiessam/anki-semantic-search`
 - **License:** MIT
-- **Screenshots:** Add 1–2 if you have them
+- **Screenshots:** Add 1–2 images from the `screenshots/` folder (e.g. search window, settings). On AnkiWeb: Edit add-on → upload in the Images/Screenshots section.
+
+### Step 2b: Branch support (optional)
+
+If you want to specify version compatibility in AnkiWeb’s **Branches** section:
+
+1. Click **Add New Branch**
+2. **Min version:** `25.09.2` — minimum Anki version supported (tested on this version)
+3. **Max version:** leave blank — no upper limit (add-on works on 25.09.2 and newer)
+4. Upload your `anki_semantic_search.ankiaddon` for this branch
+
+The description already states “tested only on 25.09.2” so users know; branches don’t need to restrict versions unless you publish different builds for different Anki versions.
 
 ### Step 3: After approval
 

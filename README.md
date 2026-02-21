@@ -25,7 +25,7 @@ Minimal path to run everything locally with no API keys:
 
 ## Requirements
 
-- **Anki 2.1.66+** (tested on 25.09.2)
+- **Anki 25.09.2** (tested on this version)
 - **Embedding engine:** Ollama (local, no key) or Voyage/OpenAI/Cohere (API key required)
 - **AI provider:** Ollama (local) or OpenAI/Anthropic (API key required)
 
@@ -38,6 +38,12 @@ Minimal path to run everything locally with no API keys:
 | Spell check in search | pyspellchecker | `pip install pyspellchecker` |
 
 See [config.md](config.md) for full details and troubleshooting.
+
+## Screenshots
+
+| Search Window | Settings (1) | Settings (2) |
+|---------------|--------------|--------------|
+| ![Search window](screenshots/search-window.png) | ![Settings 1](screenshots/setting-window-1.png) | ![Settings 2](screenshots/setting-window-2.png) |
 
 ## Privacy
 
