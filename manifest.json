@@ -1,0 +1,9 @@
+{
+  "package": "AI_search",
+  "name": "Anki Semantic Search",
+  "author": "Zahi-Essam",
+  "version": "1.0.0",
+  "min_point_version": 0,
+  "min_anki_version": 2066000000,
+  "conflicts": []
+}

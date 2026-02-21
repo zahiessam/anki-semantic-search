@@ -1,0 +1,233 @@
+{
+  "api_key": "",
+  "provider": "ollama",
+  "styling": {
+    "question_font_size": 16,
+    "answer_font_size": 16,
+    "notes_font_size": 16,
+    "label_font_size": 16,
+    "window_width": 1100,
+    "window_height": 800,
+    "section_spacing": 8,
+    "layout_mode": "side_by_side",
+    "answer_spacing": "normal"
+  },
+  "note_type_filter": {
+    "enabled_note_types": [
+      "AnKingOverhaul (AnKing Step Deck / AnKingMed)"
+    ],
+    "search_all_fields": false,
+    "note_type_fields": {
+      "AnKing": [
+        "Text",
+        "Extra"
+      ],
+      "AnKingDerm": [
+        "Text",
+        "Extra"
+      ],
+      "AnKingMCAT": [
+        "Text",
+        "Extra"
+      ],
+      "AnKingOverhaul": [
+        "Text",
+        "Extra"
+      ],
+      "AnKingOverhaul (AnKing Step Deck / AnKingMed)": [
+        "Text",
+        "Extra"
+      ],
+      "AnKingOverlapping": [
+        "Text",
+        "Extra"
+      ],
+      "Cloze": [
+        "Text"
+      ],
+      "Cloze (Multiple)": [
+        "Text"
+      ],
+      "Cloze-AnKingMaster-v3": [
+        "Text",
+        "Extra"
+      ],
+      "Cloze-lolnotacop": [
+        "Text",
+        "Extra"
+      ],
+      "Cloze-one by one 2.1": [
+        "Text",
+        "Extra"
+      ],
+      "Emtyaz-anking (Doctor_guide_(Egyptian_practice_book) / zahiessam)": [
+        "Text",
+        "Extra"
+      ],
+      "IO-one by one": [
+        "Extra"
+      ],
+      "IO-one by one (AnKing Step Deck / AnKingMed)": [
+        "Extra"
+      ],
+      "lolnotacop's microbiology": [
+        "Text",
+        "Extra"
+      ],
+      "Physeo-Cloze": [
+        "Text",
+        "Extra"
+      ],
+      "Physeo-IO one by one": [
+        "Extra"
+      ],
+      "Radiology Cloze": [
+        "Text",
+        "Extra"
+      ],
+      "Sketchy-Cloze": [
+        "Text",
+        "Extra"
+      ]
+    },
+    "use_first_field_fallback": true,
+    "enabled_decks": [
+      "AnKing Overhaul for Step 1 & 2"
+    ]
+  },
+  "search_config": {
+    "search_method": "hybrid",
+    "relevance_mode": "broad",
+    "enable_query_expansion": true,
+    "enable_hyde": true,
+    "enable_rerank": true,
+    "use_context_boost": true,
+    "min_relevance_percent": 60,
+    "strict_relevance": false,
+    "max_results": 30,
+    "context_chars_per_note": 0,
+    "relevance_from_answer": true,
+    "hybrid_embedding_weight": 35,
+    "embedding_engine": "voyage",
+    "voyage_api_key": "pa-ip7KkHW3-NRmKUBql0iUlHK2BH4nD7onwu3TX40Jn8N",
+    "voyage_embedding_model": "voyage-3.5-lite",
+    "openai_embedding_api_key": "",
+    "openai_embedding_model": "text-embedding-3-small",
+    "cohere_api_key": "",
+    "cohere_embedding_model": "embed-english-v3.0",
+    "voyage_batch_size": 18,
+    "ollama_base_url": "http://localhost:11434",
+    "ollama_embed_model": "nomic-embed-text:latest",
+    "ollama_query_expansion_model": "",
+    "ollama_batch_size": 14,
+    "use_dynamic_batch_size": true,
+    "ollama_chat_model": "gpt-oss:120b-cloud",
+    "rerank_python_path": "C:\\Users\\Esterad\\AppData\\Local\\Programs\\Python\\Python311",
+    "sentence_transformers_path": null,
+    "sensitivity_percent": 62,
+    "show_only_cited": true,
+    "extra_stop_words": [
+      "pediatrics",
+      "mechanism",
+      "formation",
+      "indications",
+      "drugs",
+      "treatment",
+      "treatments",
+      "their",
+      "types",
+      "used",
+      "involves",
+      "typically"
+    ],
+    "verbose_search_debug": true,
+    "synonym_overrides": [],
+    "use_ai_generic_term_detection": true,
+    "base_stop_words": null
+  },
+  "saved_presets": {
+    "AnkingOverhaul": {
+      "enabled_note_types": [
+        "AnKingOverhaul (AnKing Step Deck / AnKingMed)"
+      ],
+      "search_all_fields": false,
+      "note_type_fields": {
+        "AnKing": [
+          "Text",
+          "Extra"
+        ],
+        "AnKingDerm": [
+          "Text",
+          "Extra"
+        ],
+        "AnKingMCAT": [
+          "Text",
+          "Extra"
+        ],
+        "AnKingOverhaul": [
+          "Text",
+          "Extra"
+        ],
+        "AnKingOverhaul (AnKing Step Deck / AnKingMed)": [
+          "Text",
+          "Extra"
+        ],
+        "AnKingOverlapping": [
+          "Text",
+          "Extra"
+        ],
+        "Cloze": [
+          "Text"
+        ],
+        "Cloze (Multiple)": [
+          "Text"
+        ],
+        "Cloze-AnKingMaster-v3": [
+          "Text",
+          "Extra"
+        ],
+        "Cloze-lolnotacop": [
+          "Text",
+          "Extra"
+        ],
+        "Cloze-one by one 2.1": [
+          "Text",
+          "Extra"
+        ],
+        "Emtyaz-anking (Doctor_guide_(Egyptian_practice_book) / zahiessam)": [
+          "Text",
+          "Extra"
+        ],
+        "IO-one by one": [
+          "Extra"
+        ],
+        "IO-one by one (AnKing Step Deck / AnKingMed)": [
+          "Extra"
+        ],
+        "lolnotacop's microbiology": [
+          "Text",
+          "Extra"
+        ],
+        "Physeo-Cloze": [
+          "Text",
+          "Extra"
+        ],
+        "Physeo-IO one by one": [
+          "Extra"
+        ],
+        "Radiology Cloze": [
+          "Text",
+          "Extra"
+        ],
+        "Sketchy-Cloze": [
+          "Text",
+          "Extra"
+        ]
+      },
+      "use_first_field_fallback": true,
+      "enabled_decks": [
+        "AnKing Overhaul for Step 1 & 2"
+      ]
+    }
+  }
+}

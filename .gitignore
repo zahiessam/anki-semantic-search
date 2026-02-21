@@ -1,0 +1,18 @@
+# User artifacts - do not ship in release zip
+debug_log.txt
+debug_log.txt.old
+debug-*.log
+search_history.json
+embeddings_cache*.json
+embeddings_*.db
+embeddings_checkpoint.json
+*.tmp
+config.json.tmp
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.venv/
+venv/
