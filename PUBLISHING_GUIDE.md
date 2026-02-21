@@ -24,7 +24,7 @@ Use this when creating/editing your add-on on [AnkiWeb](https://ankiweb.net):
 
 ## Requirements
 
-- Anki 2.1.66+
+- Anki 2.1.66+ (tested on 25.09.2)
 - Embedding engine: Ollama (local) or Voyage/OpenAI/Cohere (API keys)
 - AI provider: Ollama (local) or OpenAI/Anthropic (API keys)
 

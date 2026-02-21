@@ -23,7 +23,7 @@ Minimal path to run everything locally with no API keys:
 
 ## Requirements
 
-- **Anki 2.1.66+**
+- **Anki 2.1.66+** (tested on 25.09.2)
 - **Embedding engine:** Ollama (local, no key) or Voyage/OpenAI/Cohere (API key required)
 - **AI provider:** Ollama (local) or OpenAI/Anthropic (API key required)
 
