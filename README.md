@@ -25,10 +25,10 @@ Open the **Settings** (via the side drawer icon or Add-ons Config):
 | **The Librarian (Search/Embeddings)** | **The Doctor (Answering Queries)** |
 | :--- | :--- |
 | *How the AI finds your cards.* | *How the AI explains the results.* |
-| **Options:** Ollama (Free), Voyage, OpenAI, Cohere. | **Options:** Local Server, OpenAI, Anthropic, Gemini. |
+| **Options:** Local AI (Ollama/LM Studio), Voyage, OpenAI, Cohere. | **Options:** Local Server, OpenAI, Anthropic, Gemini. |
 | **Setup:** Choose one in "Search Settings". | **Setup:** Choose one in "API Settings". |
 
-> **💡 Pro Tip:** You can search locally with **Ollama** (Private/Free) but use a high-powered **Cloud LLM** to generate the final answer for the best of both worlds.
+> **💡 Pro Tip:** You can search locally with a **Local Server** (Ollama/LM Studio) but use a high-powered **Cloud LLM** to generate the final answer for the best of both worlds.
 
 ### 3. Select Note Types & Build Index
 - In Settings, go to **Search Settings** and **select which Note Types** you want to search (e.g., "Medical", "Cloze").
@@ -47,7 +47,7 @@ Keep your search 100% private and free by using local AI servers:
 
 ## 🛠 Requirements
 - **Anki 2.1.66+** (Qt6).
-- **Local AI:** [Ollama](https://ollama.com) or [LM Studio](https://lmstudio.ai) running locally.
+- **Local AI:** A running instance of [Ollama](https://ollama.com), [LM Studio](https://lmstudio.ai), or any OpenAI-compatible server.
 - **Cloud AI:** An API key for your chosen provider (OpenAI, Voyage, etc.).
 
 ## 🔒 Privacy & Data Management
