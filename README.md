@@ -37,12 +37,14 @@ Minimal path to run everything locally with no API keys:
 
 See [config.md](config.md) for full details and troubleshooting.
 
-## Privacy
+## Privacy & Data Management
 
-AI answers may send selected note content to the chosen provider. Use **Ollama** for both embeddings and answers to keep everything local. See [config.md](config.md) for details.
+- **Isolation Protocol:** All user-specific data (SQLite databases, logs, search history) are stored in the `user_files/` directory to keep the root directory clean.
+- **Privacy:** AI answers may send selected note content to the chosen provider. Use **Ollama** for both embeddings and answers to keep everything local. See [config.md](config.md) for details.
 
 ## Changelog
 
+- **1.1.0** – UI Standardization, Emoji Sanitization, and Data Isolation (user_files/).
 - **1.0.0** – Initial release.
 
 ## Credits
