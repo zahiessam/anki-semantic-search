@@ -1,0 +1,11 @@
+# Optional: For cross-encoder re-ranking (better retrieval quality)
+# Install with: pip install sentence-transformers
+sentence-transformers>=2.2.0
+
+# Optional: For Anthropic streaming (real-time AI answer updates)
+# Install with: pip install anthropic
+anthropic>=0.39.0
+
+# Optional: For spell check in the search box (underline misspellings, right-click suggestions)
+# Install with: pip install pyspellchecker
+pyspellchecker>=0.8.0

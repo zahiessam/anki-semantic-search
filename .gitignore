@@ -1,0 +1,25 @@
+# User-specific data and logs
+user_files/
+config.json
+meta.json
+*.db
+*.json
+*.log
+debug_log.txt
+search_history.json
+embeddings_*.db
+embeddings_cache_*.json
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+
+# IDE settings
+.idea/
+.cursor/
+.vscode/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
