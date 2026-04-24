@@ -1,7 +1,16 @@
 """Config load/save and helpers."""
+
+# ============================================================================
+# Imports
+# ============================================================================
+
 import os
 import json
 from .log import log_debug
+
+# ============================================================================
+# Default Configuration
+# ============================================================================
 
 # Voyage embedding models: voyage-3-lite is faster with fewer dimensions; voyage-3.5-lite is higher quality
 VOYAGE_EMBEDDING_MODELS = ["voyage-3-lite", "voyage-3.5-lite"]
@@ -86,6 +95,10 @@ DEFAULT_CONFIG = {
 }
 
 
+# ============================================================================
+# Config File Access
+# ============================================================================
+
 def _deep_merge(base, override):
     """Merge override into base recursively. Override values take precedence."""
     result = dict(base)
@@ -159,6 +172,10 @@ def get_config_value(config, key, default):
         return default
     return config.get(key, default)
 
+
+# ============================================================================
+# Effective Embedding Configuration
+# ============================================================================
 
 # explanation: normalizes display names from the embedding provider dropdown into backend ids.
 def _normalize_embedding_cloud_provider(provider):

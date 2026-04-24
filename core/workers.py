@@ -1,3 +1,7 @@
+# ============================================================================
+# Imports
+# ============================================================================
+
 import time
 import hashlib
 import numpy as np
@@ -17,16 +21,20 @@ from .engine import (
     flush_embedding_batch,
     _build_deck_query,
     get_embedding_engine_id,
-    _is_embedding_dimension_mismatch,
     save_checkpoint,
     extract_keywords_improved,
     compute_tfidf_scores,
     aggregate_scored_notes_by_note_id
 )
+from .errors import _is_embedding_dimension_mismatch
 from ..utils.config import load_config, get_config_value
 from ..utils.paths import get_checkpoint_path, get_embeddings_db_path
 from ..utils.log import log_debug
 from ..utils.embeddings_status import format_partial_failure_progress
+
+# ============================================================================
+# Search And Embedding Workers
+# ============================================================================
 
 class EmbeddingSearchWorker(QThread):
     """Worker thread for embedding search (prevents UI freezing)."""
@@ -85,6 +93,10 @@ class EmbeddingSearchWorker(QThread):
                 self.error_signal.emit("dimension_mismatch")
             else:
                 self.error_signal.emit(str(e))
+
+# ============================================================================
+# Rerank Availability And Embedding Index Workers
+# ============================================================================
 
 class RerankCheckWorker(QThread):
     """Worker thread for checking sentence-transformers availability."""
@@ -226,6 +238,10 @@ class EmbeddingWorker(QThread):
         except Exception as e: self.error_signal.emit(str(e))
 
 
+# ============================================================================
+# Keyword Filtering And Rerank Workers
+# ============================================================================
+
 class KeywordFilterWorker(QThread):
     """Worker thread for keyword_filter so search doesn't freeze the main thread."""
 
@@ -362,6 +378,10 @@ class RelevanceRerankWorker(QThread):
             log_debug(f"RelevanceRerankWorker error: {e}")
             self.finished_signal.emit(None)
 
+
+# ============================================================================
+# Answer Generation Workers
+# ============================================================================
 
 class AskAIWorker(QThread):
     """Run ask_ai in a background thread so the main thread stays responsive."""

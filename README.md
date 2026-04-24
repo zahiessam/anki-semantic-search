@@ -54,6 +54,20 @@ Keep your search 100% private and free by using local AI servers:
 - **Isolation Protocol:** Your search data and logs are stored in `user_files/` to keep your Anki profile folder tidy.
 - **Cloud Privacy:** If using Cloud providers, only the cards relevant to your search are sent to the AI for answering. Use a local server for 100% privacy.
 
+## Developer Map
+- `ui/dialogs.py` contains the main search dialog and the remaining search workflow compatibility layer.
+- `ui/settings_dialog.py` contains settings, provider configuration, note/deck filters, and embedding status actions.
+- `ui/dependency_install.py` contains optional dependency detection, Visual C++ checks, PyTorch repair guidance, and installer helpers.
+- `ui/dialog_entrypoints.py` coordinates opening/closing search, settings, and debug dialogs while `ui/dialogs.py` keeps compatibility wrappers.
+- `ui/search_workers.py` contains local search worker threads and standalone rerank helpers used by the search workflow.
+- `ui/answer_prompts.py` contains reusable prompt construction helpers for answer generation.
+- `ui/answer_formatting.py` contains reusable answer-to-HTML formatting and citation link generation.
+- `ui/answer_navigation.py` contains citation click handling, browser opening, and answer clipboard helpers.
+- `ui/search_workflow.py` contains the copied search workflow methods and installs them onto `AISearchDialog` for compatibility.
+- `ui/note_content.py` contains note content loading, HTML/cloze text helpers, and dialog-facing keyword/TF-IDF wrappers.
+- `ui/query_enhancement.py` contains query expansion, AI generic-term exclusion, HyDE generation, and relevance-mode helper logic.
+- `core/keyword_scoring.py` and `core/errors.py` contain shared scoring and error-classification helpers used by core workers and UI code.
+
 ## 📜 Changelog (v1.1.0)
 - **Standardized UI:** Easier setup for Cloud providers.
 - **Local Server Expansion:** Improved compatibility with LM Studio and other OpenAI-style local servers.

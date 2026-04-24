@@ -1,9 +1,12 @@
 """Embedding, collection helpers, and persistence for the addon UI/workers."""
 
+# ============================================================================
+# Imports
+# ============================================================================
+
 import datetime
 import hashlib
 import json
-import math
 import os
 import re
 import time
@@ -20,6 +23,18 @@ from ..utils import (
     load_config,
     log_debug,
 )
+from .errors import _is_embedding_dimension_mismatch
+from .keyword_scoring import (
+    _simple_stem,
+    aggregate_scored_notes_by_note_id,
+    compute_tfidf_scores,
+    extract_keywords_improved,
+    get_extended_stop_words,
+)
+
+# ============================================================================
+# Module Constants And Caches
+# ============================================================================
 
 HTML_TAG_RE = re.compile(r"<.*?>", re.DOTALL)
 OLLAMA_EMBED_CHUNK_SIZE = 64
@@ -32,115 +47,11 @@ _corrupted_files = set()
 MAX_EMBEDDING_CACHE_SIZE = 100
 
 
-def _simple_stem(word):
-    if len(word) <= 3:
-        return word
-    suffixes = ["ing", "ed", "er", "est", "ly", "s", "es", "tion", "sion", "ness", "ment"]
-    word_lower = word.lower()
-    for suffix in suffixes:
-        if word_lower.endswith(suffix) and len(word_lower) > len(suffix) + 2:
-            return word_lower[: -len(suffix)]
-    return word_lower
+# ============================================================================
+# Embedding Provider Clients
+# ============================================================================
 
-
-def get_extended_stop_words(search_config=None):
-    builtin_stop_words = {
-        "what", "is", "are", "the", "a", "an", "how", "why", "when", "where", "who",
-        "does", "do", "can", "could", "would", "should", "tell", "me", "about", "explain",
-        "describe", "define", "list", "show", "give", "provide", "this", "that", "these",
-        "those", "with", "from", "for", "and", "or", "but", "not", "have", "has", "had",
-        "been", "being", "was", "were", "will", "may", "might", "must", "shall",
-        "which", "work", "works", "working", "use", "uses", "used", "using",
-        "cause", "causes", "overview", "introduction", "review", "study", "case", "cases",
-        "difference", "between", "compared", "comparison", "similar", "similarity",
-        "different", "same", "other", "another", "each", "every", "both", "either",
-        "neither", "like", "such", "common", "generally", "usually", "often", "typically",
-        "example", "examples", "including", "involves", "involve", "related", "association",
-    }
-    stop_words = set(builtin_stop_words)
-    if search_config:
-        extra = search_config.get("extra_stop_words") or []
-        if isinstance(extra, str):
-            extra = [extra]
-        for item in extra:
-            if isinstance(item, str) and item.strip():
-                stop_words.add(item.strip().lower())
-    return stop_words
-
-
-def extract_keywords_improved(query, search_config=None, ai_excluded=None):
-    query_lower = (query or "").lower()
-    query_words = re.findall(r"\b\w+\b", query_lower)
-    stop_words = get_extended_stop_words(search_config)
-    ai_excluded = ai_excluded or set()
-
-    keywords = []
-    stems = {}
-    for word in query_words:
-        if word not in stop_words and word not in ai_excluded and len(word) > 2:
-            stem = _simple_stem(word)
-            keywords.append(word)
-            if stem != word:
-                stems[stem] = word
-
-    phrases = []
-    if len(keywords) > 1:
-        for i in range(len(keywords) - 1):
-            phrases.append(f"{keywords[i]} {keywords[i + 1]}")
-    if len(keywords) > 2:
-        for i in range(len(keywords) - 2):
-            phrases.append(f"{keywords[i]} {keywords[i + 1]} {keywords[i + 2]}")
-    return keywords, stems, phrases
-
-
-def compute_tfidf_scores(notes, query_keywords):
-    if not notes or not query_keywords:
-        return {}, set()
-
-    note_tfs = {}
-    doc_freq = {}
-    for note in notes:
-        content_lower = note["content"].lower()
-        note_tfs[note["id"]] = {}
-        for keyword in query_keywords:
-            count = content_lower.count(keyword)
-            if count > 0:
-                note_tfs[note["id"]][keyword] = count
-                doc_freq[keyword] = doc_freq.get(keyword, 0) + 1
-
-    total_notes = max(1, len(notes))
-    high_freq_keywords = {
-        keyword for keyword, freq in doc_freq.items() if (freq / total_notes) >= 0.65
-    }
-
-    tfidf_scores = {}
-    for note_id, tfs in note_tfs.items():
-        score = 0.0
-        for keyword, tf in tfs.items():
-            idf = math.log(total_notes / max(1, doc_freq[keyword]))
-            score += tf * idf
-        tfidf_scores[note_id] = score
-
-    return tfidf_scores, high_freq_keywords
-
-
-def aggregate_scored_notes_by_note_id(scored_notes):
-    if not scored_notes:
-        return []
-
-    best_by_id = {}
-    for score, note in scored_notes:
-        note_id = note.get("id")
-        if note_id is None:
-            continue
-        prev = best_by_id.get(note_id)
-        if prev is None or score > prev[0]:
-            best_by_id[note_id] = (score, note)
-
-    out = list(best_by_id.values())
-    out.sort(key=lambda item: item[0], reverse=True)
-    return out
-
+# --- Shared Request Helpers ---
 
 def estimate_tokens(text):
     return len(text or "") // 4
@@ -152,6 +63,8 @@ def _request_json(url, payload=None, headers=None, timeout=30):
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
+
+# --- Voyage AI Embeddings ---
 
 def get_embedding_via_voyage(text, is_query=False, api_key=None, model=None):
     effective_key = (api_key or "").strip() or os.environ.get("VOYAGE_API_KEY", "").strip()
@@ -197,6 +110,8 @@ def get_embeddings_via_voyage_batch(texts, input_type="document", api_key=None, 
     return [item["embedding"] for item in data.get("data", [])]
 
 
+# --- OpenAI Embeddings ---
+
 def get_embedding_via_openai(text, api_key=None, model=None):
     effective_key = (api_key or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
     if not effective_key:
@@ -230,6 +145,8 @@ def get_embeddings_via_openai_batch(texts, api_key=None, model=None):
     )
     return [item["embedding"] for item in data.get("data", [])]
 
+
+# --- Cohere Embeddings ---
 
 def get_embedding_via_cohere(text, is_query=False, api_key=None, model=None):
     effective_key = (api_key or "").strip() or os.environ.get("COHERE_API_KEY", "").strip()
@@ -273,6 +190,8 @@ def get_embeddings_via_cohere_batch(texts, input_type="document", api_key=None, 
     )
     return data.get("embeddings") or []
 
+
+# --- Ollama Embeddings ---
 
 def get_ollama_models(base_url="http://localhost:11434"):
     try:
@@ -326,6 +245,8 @@ def get_embeddings_via_ollama_batch(texts, base_url="http://localhost:11434", mo
     return out
 
 
+# --- Local OpenAI-Compatible Embeddings ---
+
 def get_embedding_via_local_openai(text, base_url="http://localhost:1234/v1", model=None):
     data = _request_json(
         f"{base_url.rstrip('/')}/embeddings",
@@ -347,6 +268,8 @@ def get_embeddings_via_local_openai_batch(texts, base_url="http://localhost:1234
     )
     return [item["embedding"] for item in data.get("data", [])]
 
+
+# --- Provider Routing And Engine Identity ---
 
 def _resolve_embedding_engine_identity(config=None):
     """Return the canonical embedding engine id plus compatible historical aliases."""
@@ -486,6 +409,10 @@ def get_embeddings_batch(texts, input_type="document", config=None):
         model=(sc.get("voyage_embedding_model") or "voyage-3.5-lite").strip(),
     )
 
+
+# ============================================================================
+# Anki Collection Queries
+# ============================================================================
 
 def get_notes_count_per_model():
     try:
@@ -672,6 +599,12 @@ def analyze_note_eligibility(ntf):
 def count_notes_matching_config(ntf):
     return analyze_note_eligibility(ntf).get("eligible_count", 0)
 
+
+# ============================================================================
+# Embedding Persistence
+# ============================================================================
+
+# --- SQLite Storage Helpers ---
 
 def _embeddings_db_ensure_table(conn):
     cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='embeddings'")
@@ -950,6 +883,10 @@ def migrate_embeddings_json_to_db():
         return 0, str(exc)
 
 
+# ============================================================================
+# Embedding Checkpoints And Error Classification
+# ============================================================================
+
 def save_checkpoint(processed_note_ids, total_notes, errors=0, engine_id=None):
     try:
         if engine_id is None:
@@ -998,8 +935,3 @@ def clear_checkpoint():
     except Exception as exc:
         log_debug(f"Error clearing checkpoint: {exc}")
         return False
-
-
-def _is_embedding_dimension_mismatch(exc):
-    s = str(exc)
-    return "not aligned" in s or ("shapes" in s and "dim" in s)
