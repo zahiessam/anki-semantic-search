@@ -18,6 +18,7 @@ This report lists organization and de-duplication candidates only. No file moves
 - Extracted note content loading, text helpers, and dialog-facing keyword/TF-IDF wrappers into `ui/note_content.py`.
 - Extracted query expansion, AI generic-term exclusion, HyDE generation, and relevance-mode helpers into `ui/query_enhancement.py`.
 - Extracted dialog-facing embedding lookup/search, note metadata, and context boost helpers into `ui/embedding_helpers.py`.
+- Extracted search dialog state, history, scope banner, settings launcher, and option handlers into `ui/search_dialog_state.py`.
 
 ## Safe File-Splitting Candidates
 
