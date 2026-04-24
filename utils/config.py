@@ -77,6 +77,7 @@ DEFAULT_CONFIG = {
         "use_ai_generic_term_detection": False,
     },
     "saved_presets": {},
+    "current_preset_name": None,
 }
 
 

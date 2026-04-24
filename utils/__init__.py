@@ -27,6 +27,12 @@ from .paths import (
     get_embeddings_db_path,
     get_checkpoint_path,
 )
+from .history import (
+    get_search_history_queries,
+    load_search_history,
+    save_search_history,
+    clear_search_history,
+)
 
 __all__ = [
     "log_debug",
@@ -48,7 +54,8 @@ __all__ = [
     "get_config_value",
     "VOYAGE_EMBEDDING_MODELS",
     "get_embeddings_storage_path",
-    "get_embeddings_storage_path_for_read",
-    "get_embeddings_db_path",
-    "get_checkpoint_path",
+    "get_search_history_queries",
+    "load_search_history",
+    "save_search_history",
+    "clear_search_history",
 ]
