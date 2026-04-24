@@ -59,6 +59,7 @@ Keep your search 100% private and free by using local AI servers:
 - `ui/settings_dialog.py` contains settings, provider configuration, note/deck filters, and embedding status actions.
 - `ui/dependency_install.py` contains optional dependency detection, Visual C++ checks, PyTorch repair guidance, and installer helpers.
 - `ui/dialog_entrypoints.py` coordinates opening/closing search, settings, and debug dialogs while `ui/dialogs.py` keeps compatibility wrappers.
+- `ui/search_dialog_ui.py` contains search dialog default reset behavior and main UI construction.
 - `ui/search_dialog_state.py` contains search dialog state, history, scope banner, settings launcher, and option handlers.
 - `ui/search_workers.py` contains local search worker threads and standalone rerank helpers used by the search workflow.
 - `ui/answer_prompts.py` contains reusable prompt construction helpers for answer generation.
