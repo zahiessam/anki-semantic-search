@@ -20,6 +20,7 @@ This report lists organization and de-duplication candidates only. No file moves
 - Extracted dialog-facing embedding lookup/search, note metadata, and context boost helpers into `ui/embedding_helpers.py`.
 - Extracted search dialog state, history, scope banner, settings launcher, and option handlers into `ui/search_dialog_state.py`.
 - Extracted search dialog default reset behavior and main UI construction into `ui/search_dialog_ui.py`.
+- Extracted `AISearchDialog` constructor/lifecycle initialization into `ui/search_dialog_lifecycle.py`.
 
 ## Safe File-Splitting Candidates
 
