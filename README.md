@@ -66,6 +66,7 @@ Keep your search 100% private and free by using local AI servers:
 - `ui/search_workflow.py` contains the copied search workflow methods and installs them onto `AISearchDialog` for compatibility.
 - `ui/note_content.py` contains note content loading, HTML/cloze text helpers, and dialog-facing keyword/TF-IDF wrappers.
 - `ui/query_enhancement.py` contains query expansion, AI generic-term exclusion, HyDE generation, and relevance-mode helper logic.
+- `ui/embedding_helpers.py` contains dialog-facing embedding lookup/search, note metadata, and context boost helpers.
 - `core/keyword_scoring.py` and `core/errors.py` contain shared scoring and error-classification helpers used by core workers and UI code.
 
 ## 📜 Changelog (v1.1.0)

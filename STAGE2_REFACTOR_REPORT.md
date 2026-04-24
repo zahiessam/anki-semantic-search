@@ -17,6 +17,7 @@ This report lists organization and de-duplication candidates only. No file moves
 - Extracted the dynamic search workflow container and method installer into `ui/search_workflow.py`, while keeping the same runtime method-copy behavior.
 - Extracted note content loading, text helpers, and dialog-facing keyword/TF-IDF wrappers into `ui/note_content.py`.
 - Extracted query expansion, AI generic-term exclusion, HyDE generation, and relevance-mode helpers into `ui/query_enhancement.py`.
+- Extracted dialog-facing embedding lookup/search, note metadata, and context boost helpers into `ui/embedding_helpers.py`.
 
 ## Safe File-Splitting Candidates
 
