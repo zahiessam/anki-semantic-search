@@ -117,14 +117,16 @@ class EmbeddingWorker(QThread):
     finished_signal = pyqtSignal(int, int, int, int)
     error_signal = pyqtSignal(str)
 
-    def __init__(self, ntf, note_count, checkpoint, resume_available):
+    def __init__(self, ntf, note_count, checkpoint, resume_available, config=None):
         super().__init__()
         self.ntf = ntf
         self.note_count = note_count
         self.checkpoint = checkpoint
         self.resume_available = resume_available
         self._is_paused = False
-        config = load_config()
+        # explanation: use dialog-provided embedding settings when available.
+        self.config = config or load_config()
+        config = self.config
         self.progress_update_interval = get_config_value(config, 'progress_update_interval', 10)
         self.last_progress_update = 0
         sc = config.get("search_config") or {}
@@ -141,11 +143,11 @@ class EmbeddingWorker(QThread):
             if self.isInterruptionRequested(): return
             try:
                 self.status_update.emit("Testing connection...")
-                test_emb = get_embedding_for_query("Test connection")
+                test_emb = get_embedding_for_query("Test connection", config=self.config)
                 self.log_message.emit("\u2705 Connection verified")
             except Exception as e: raise Exception(f"API test failed: {str(e)[:100]}")
             expected_dim = len(test_emb) if test_emb else None
-            config = load_config()
+            config = self.config
             engine_id = get_embedding_engine_id(config)
             self._start_time = time.time()
             deck_q = _build_deck_query(self.ntf.get('enabled_decks'))

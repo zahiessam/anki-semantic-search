@@ -75,6 +75,11 @@ DEFAULT_CONFIG = {
         "synonym_overrides": [],
         # Optional: one short LLM call per search to detect generic query terms to exclude
         "use_ai_generic_term_detection": False,
+        "embedding_same_as_answer": True,
+        "embedding_strategy": "cloud",
+        "embedding_cloud_provider": "Voyage AI",
+        "embedding_cloud_api_key": "",
+        "embedding_local_url": "",
     },
     "saved_presets": {},
     "current_preset_name": None,
@@ -153,3 +158,148 @@ def get_config_value(config, key, default):
     if not config:
         return default
     return config.get(key, default)
+
+
+# explanation: normalizes display names from the embedding provider dropdown into backend ids.
+def _normalize_embedding_cloud_provider(provider):
+    value = (provider or "Voyage AI").strip().lower()
+    if "openai" in value:
+        return "openai"
+    if "cohere" in value:
+        return "cohere"
+    return "voyage"
+
+
+# explanation: maps the answer provider settings to an embedding backend only when supported.
+def _embedding_config_from_answer_provider(config, sc):
+    provider = (config.get("provider") or "").strip().lower()
+    answer_key = (config.get("api_key") or "").strip()
+    effective = dict(sc)
+
+    if provider in ("ollama",):
+        effective["embedding_engine"] = "ollama"
+        effective["ollama_base_url"] = (
+            sc.get("ollama_base_url")
+            or sc.get("local_llm_url")
+            or "http://localhost:11434"
+        )
+        effective["ollama_embed_model"] = (
+            sc.get("ollama_embed_model")
+            or sc.get("ollama_chat_model")
+            or sc.get("local_llm_model")
+            or "nomic-embed-text"
+        )
+        return effective
+
+    if provider in ("local_openai", "local_server"):
+        effective["embedding_engine"] = "local_openai"
+        effective["local_llm_url"] = (
+            sc.get("local_llm_url")
+            or sc.get("embedding_local_url")
+            or "http://localhost:1234/v1"
+        )
+        effective["local_llm_model"] = (
+            sc.get("local_llm_model")
+            or sc.get("ollama_embed_model")
+            or "text-embedding-3-small"
+        )
+        return effective
+
+    if provider == "openai":
+        effective["embedding_engine"] = "openai"
+        effective["openai_embedding_api_key"] = answer_key
+        effective["openai_embedding_model"] = (
+            sc.get("openai_embedding_model") or "text-embedding-3-small"
+        )
+        return effective
+
+    effective["embedding_engine"] = "unsupported_same_as_answer"
+    return effective
+
+
+# explanation: returns the correct embedding provider config
+# based on whether the user chose "same as answer" or independent
+def get_effective_embedding_config(config: dict) -> dict:
+    config = dict(config or {})
+    sc = dict(config.get("search_config") or {})
+
+    if sc.get("embedding_same_as_answer", True):
+        effective_sc = _embedding_config_from_answer_provider(config, sc)
+    else:
+        strategy = (sc.get("embedding_strategy") or "cloud").strip().lower()
+        effective_sc = dict(sc)
+
+        if strategy == "local":
+            effective_sc["embedding_engine"] = "local_openai"
+            effective_sc["local_llm_url"] = (
+                sc.get("embedding_local_url")
+                or sc.get("local_llm_url")
+                or "http://localhost:11434/v1"
+            )
+            effective_sc["local_llm_model"] = (
+                sc.get("local_llm_model")
+                or sc.get("ollama_embed_model")
+                or "text-embedding-3-small"
+            )
+        else:
+            provider_id = _normalize_embedding_cloud_provider(
+                sc.get("embedding_cloud_provider")
+            )
+            api_key = (sc.get("embedding_cloud_api_key") or "").strip()
+            effective_sc["embedding_engine"] = provider_id
+            if provider_id == "openai":
+                effective_sc["openai_embedding_api_key"] = api_key
+                effective_sc["openai_embedding_model"] = (
+                    sc.get("openai_embedding_model") or "text-embedding-3-small"
+                )
+            elif provider_id == "cohere":
+                effective_sc["cohere_api_key"] = api_key
+                effective_sc["cohere_embedding_model"] = (
+                    sc.get("cohere_embedding_model") or "embed-english-v3.0"
+                )
+            else:
+                effective_sc["voyage_api_key"] = api_key
+                effective_sc["voyage_embedding_model"] = (
+                    sc.get("voyage_embedding_model") or "voyage-3.5-lite"
+                )
+
+    effective = dict(config)
+    effective["search_config"] = effective_sc
+    return effective
+
+
+# explanation: validates that the embedding provider fields
+# are sufficiently filled before allowing embedding creation
+def validate_embedding_config(config: dict) -> tuple[bool, str]:
+    effective = get_effective_embedding_config(config)
+    sc = effective.get("search_config") or {}
+    engine = (sc.get("embedding_engine") or "").strip().lower()
+
+    if engine == "unsupported_same_as_answer":
+        provider = (effective.get("provider") or "selected answer provider").strip()
+        return (
+            False,
+            f"{provider} cannot create embeddings here. Turn off 'Use same provider as answering' and choose Voyage AI, OpenAI, Cohere, or a local /embeddings server.",
+        )
+
+    if engine in ("local_openai", "ollama"):
+        url_key = "ollama_base_url" if engine == "ollama" else "local_llm_url"
+        if not (sc.get(url_key) or "").strip():
+            return False, "Enter a local embedding server URL before creating embeddings."
+        return True, ""
+
+    key_by_engine = {
+        "voyage": "voyage_api_key",
+        "openai": "openai_embedding_api_key",
+        "cohere": "cohere_api_key",
+    }
+    key_name = key_by_engine.get(engine, "voyage_api_key")
+    if not (sc.get(key_name) or "").strip():
+        provider_names = {
+            "voyage": "Voyage AI",
+            "openai": "OpenAI",
+            "cohere": "Cohere",
+        }
+        return False, f"Enter a {provider_names.get(engine, 'cloud')} API key before creating embeddings."
+
+    return True, ""

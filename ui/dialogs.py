@@ -38,6 +38,8 @@ from ..utils import (
     load_config,
     save_config,
     get_config_value,
+    get_effective_embedding_config,
+    validate_embedding_config,
     get_addon_name,
     get_embeddings_db_path,
     get_embeddings_storage_path_for_read,
@@ -19416,6 +19418,25 @@ def toggle_sidebar_visibility(visible: bool):
 
 
 
+# ============================================================
+# FILE: settings_dialog.py
+# ============================================================
+# explanation: Phase 1 mapping for the Settings Dialog UX refactor.
+# Actual file: ui/dialogs.py
+# Settings dialog class: SettingsDialog
+# API Settings tab UI builder: SettingsDialog.setup_ui()
+# Search_Embeddings tab UI builder: SettingsDialog.setup_ui()
+# Answer provider selection key: provider
+# Answer API key key: api_key
+# Existing embedding provider selection key: search_config.embedding_engine
+# Existing embedding API key keys: search_config.voyage_api_key,
+# search_config.openai_embedding_api_key, search_config.cohere_api_key
+# Existing settings save function: SettingsDialog.save_settings()
+# Existing settings load functions: SettingsDialog._apply_config_to_ui(),
+# SettingsDialog._load_config_into_ui()
+# Dark dropdown stylesheet: SettingsDialog.__init__() QComboBox rule in self.setStyleSheet()
+
+
 class SettingsDialog(QDialog):
 
 
@@ -20189,24 +20210,6 @@ class SettingsDialog(QDialog):
 
         self.answer_provider_combo.blockSignals(False) # Re-enable
 
-        self.answer_provider_combo.currentIndexChanged.connect(self._on_answer_provider_changed)
-
-
-
-        api_embed_note = QLabel("Embeddings (for semantic search) are configured in the Search & Embeddings tab.")
-
-
-
-        api_embed_note.setWordWrap(True)
-
-
-
-        api_embed_note.setStyleSheet(f"font-size: 10px; color: {theme['subtext']}; margin-top: 2px;")
-
-
-
-        answer_provider_row.addRow("", api_embed_note)
-
 
 
         api_layout.addLayout(answer_provider_row)
@@ -20442,6 +20445,161 @@ class SettingsDialog(QDialog):
         self.local_server_section.hide()
 
         api_layout.addWidget(self.local_server_section)
+
+
+
+        # explanation: adds embedding provider controls below the existing answer provider controls.
+        embedding_divider = QFrame()
+
+        embedding_divider.setFrameShape(QFrame.Shape.HLine)
+
+        embedding_divider.setFrameShadow(QFrame.Shadow.Sunken)
+
+        api_layout.addWidget(embedding_divider)
+
+
+
+        embedding_header = QLabel("\U0001F50D Embedding Provider")
+
+        embedding_header.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {theme['text']};")
+
+        api_layout.addWidget(embedding_header)
+
+
+
+        embedding_subtitle = QLabel("Used for semantic search (finding relevant cards).")
+
+        embedding_subtitle.setWordWrap(True)
+
+        embedding_subtitle.setStyleSheet(f"font-size: 11px; color: {theme['subtext']}; margin-bottom: 4px;")
+
+        api_layout.addWidget(embedding_subtitle)
+
+
+
+        self.embedding_same_checkbox = QCheckBox("Use same provider as answering")
+
+        self.embedding_same_checkbox.setChecked(True)
+
+        api_layout.addWidget(self.embedding_same_checkbox)
+
+
+
+        self.embedding_same_summary_label = QLabel()
+
+        self.embedding_same_summary_label.setWordWrap(True)
+
+        self.embedding_same_summary_label.setStyleSheet(
+
+            f"background-color: {theme['header_bg']}; color: {theme['accent']}; padding: 8px; border-radius: 5px; font-weight: bold;"
+
+        )
+
+        api_layout.addWidget(self.embedding_same_summary_label)
+
+
+
+        self.embedding_independent_section = QWidget()
+
+        embedding_independent_layout = QVBoxLayout(self.embedding_independent_section)
+
+        embedding_independent_layout.setContentsMargins(0, 0, 0, 0)
+
+        embedding_independent_layout.setSpacing(8)
+
+
+
+        embedding_strategy_row = QFormLayout()
+
+        self.embedding_strategy_combo = QComboBox()
+
+        self.embedding_strategy_combo.addItem("\U0001f4bb Local Server (Ollama, LM Studio, Jan)", "local")
+
+        self.embedding_strategy_combo.addItem("\u2601\ufe0f Cloud API (Voyage, OpenAI, Cohere)", "cloud")
+
+        embedding_strategy_row.addRow("Embedding with:", self.embedding_strategy_combo)
+
+        embedding_independent_layout.addLayout(embedding_strategy_row)
+
+
+
+        self.embedding_local_section = QWidget()
+
+        embedding_local_layout = QFormLayout(self.embedding_local_section)
+
+        embedding_local_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.embedding_local_url_input = QLineEdit()
+
+        self.embedding_local_url_input.setPlaceholderText("http://localhost:11434/v1")
+
+        embedding_local_layout.addRow("Server URL:", self.embedding_local_url_input)
+
+        embedding_local_hint = QLabel("Must expose an /embeddings endpoint")
+
+        embedding_local_hint.setStyleSheet(f"font-size: 10px; color: {theme['subtext']};")
+
+        embedding_local_layout.addRow("", embedding_local_hint)
+
+        embedding_independent_layout.addWidget(self.embedding_local_section)
+
+
+
+        self.embedding_cloud_section = QWidget()
+
+        embedding_cloud_layout = QFormLayout(self.embedding_cloud_section)
+
+        embedding_cloud_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.embedding_cloud_provider_combo = QComboBox()
+
+        self.embedding_cloud_provider_combo.addItem("Voyage AI (Recommended)", "Voyage AI")
+
+        self.embedding_cloud_provider_combo.addItem("OpenAI", "OpenAI")
+
+        self.embedding_cloud_provider_combo.addItem("Cohere", "Cohere")
+
+        embedding_cloud_layout.addRow("Cloud Provider:", self.embedding_cloud_provider_combo)
+
+
+
+        embedding_key_row = QHBoxLayout()
+
+        self.embedding_cloud_api_key_input = QLineEdit()
+
+        self.embedding_cloud_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+
+        self.embedding_cloud_api_key_input.setPlaceholderText("Paste your embedding API key here...")
+
+        embedding_key_row.addWidget(self.embedding_cloud_api_key_input)
+
+        self.embedding_cloud_show_key_btn = QPushButton("Show")
+
+        self.embedding_cloud_show_key_btn.setMaximumWidth(80)
+
+        self.embedding_cloud_show_key_btn.clicked.connect(self._toggle_embedding_cloud_key_visibility)
+
+        embedding_key_row.addWidget(self.embedding_cloud_show_key_btn)
+
+        embedding_cloud_layout.addRow("API Key:", embedding_key_row)
+
+
+
+        self.embedding_cloud_detected_label = QLabel()
+
+        self.embedding_cloud_detected_label.setStyleSheet(
+
+            f"background-color: {theme['header_bg']}; color: {theme['accent']}; padding: 8px; border-radius: 5px; font-weight: bold;"
+
+        )
+
+        embedding_cloud_layout.addRow("", self.embedding_cloud_detected_label)
+
+        embedding_independent_layout.addWidget(self.embedding_cloud_section)
+
+        api_layout.addWidget(self.embedding_independent_section)
+
+        self._connect_embedding_signals()
 
 
 
@@ -21953,77 +22111,7 @@ class SettingsDialog(QDialog):
 
 
 
-        # --- 1. EMBEDDINGS SECTION (Critical Setup - Top Priority) ---
-
-        self.embedding_section = CollapsibleSection("Embeddings (for semantic search)", is_expanded=False)
-
-        engine_row = QFormLayout()
-
-        self.embedding_engine_combo = QComboBox()
-
-        self.embedding_engine_combo.addItem("Cloud AI (Voyage, OpenAI, Cohere)", "cloud")
-
-        self.embedding_engine_combo.addItem("Local AI (Ollama, LM Studio)", "local")
-
-        self.embedding_engine_combo.currentIndexChanged.connect(self._on_embedding_engine_changed)
-
-        engine_row.addRow("AI Strategy:", self.embedding_engine_combo)
-
-        self.embedding_section.addLayout(engine_row)
-
-
-
-        self.cloud_provider_widget = QWidget()
-
-        cloud_p_layout = QFormLayout(self.cloud_provider_widget)
-
-        cloud_p_layout.setContentsMargins(0, 0, 0, 0)
-
-        self.cloud_provider_combo = QComboBox()
-
-        self.cloud_provider_combo.addItem("Voyage AI (Recommended)", "voyage")
-
-        self.cloud_provider_combo.addItem("OpenAI", "openai")
-
-        self.cloud_provider_combo.addItem("Cohere", "cohere")
-
-        self.cloud_provider_combo.currentIndexChanged.connect(self._on_embedding_engine_changed)
-
-        cloud_p_layout.addRow("Cloud Provider:", self.cloud_provider_combo)
-
-        self.embedding_section.addWidget(self.cloud_provider_widget)
-
-
-
-        # --- Cloud Specific Extras (RAG Hint/Apply) ---
-
-        self.cloud_extras_widget = QWidget()
-
-        cloud_extras_layout = QVBoxLayout(self.cloud_extras_widget)
-
-        cloud_extras_layout.setContentsMargins(0, 0, 0, 0)
-
-
-
-        self.embedding_hybrid_hint = QLabel("RAG split: Retrieval (here) = AI embedding for best quality. Answer (API tab) = Local AI.")
-
-        self.embedding_hybrid_hint.setStyleSheet("font-size: 11px; color: #7f8c8d;")
-
-        cloud_extras_layout.addWidget(self.embedding_hybrid_hint)
-
-
-
-        self.apply_hybrid_btn = QPushButton("Apply: RAG-optimized (Cloud retrieval + Local answer)")
-
-        self.apply_hybrid_btn.clicked.connect(self._on_apply_hybrid_retrieval)
-
-        cloud_extras_layout.addWidget(self.apply_hybrid_btn)
-
-
-
-        self.embedding_section.addWidget(self.cloud_extras_widget)
-
-        search_layout.addWidget(self.embedding_section)
+        # explanation: embedding provider setup moved to the API Settings tab.
 
 
 
@@ -22195,87 +22283,14 @@ class SettingsDialog(QDialog):
 
         search_layout.addWidget(tech_section)
 
+        # explanation: legacy embedding widgets stay hidden so older helper methods remain safe.
+        self.embedding_section = CollapsibleSection("Embeddings (for semantic search)", is_expanded=False)
+
+        self.embedding_section.hide()
 
 
 
 
-
-
-        # --- Standardized Cloud Provider Panels ---
-
-        self.voyage_options = self._create_api_config_group(
-
-            "voyage", "Paste Voyage API key...",
-
-            "Voyage AI API key from voyageai.com", VOYAGE_EMBEDDING_MODELS
-
-        )
-
-        self.embedding_section.addWidget(self.voyage_options)
-
-
-
-        self.openai_options = self._create_api_config_group(
-
-            "openai", "Paste OpenAI API key...",
-
-            "OpenAI API key for embeddings", None, key_suffix="_embedding"
-
-        )
-
-        self.embedding_section.addWidget(self.openai_options)
-
-
-
-        self.cohere_options = self._create_api_config_group(
-
-            "cohere", "Paste Cohere API key...",
-
-            "Cohere API key for embeddings", None
-
-        )
-
-        self.embedding_section.addWidget(self.cohere_options)
-
-
-
-
-
-
-
-        self.cloud_batch_widget = QWidget()
-
-
-
-        cloud_batch_layout = QFormLayout(self.cloud_batch_widget)
-
-
-
-        self.voyage_batch_size_spin = QSpinBox()
-
-
-
-        self.voyage_batch_size_spin.setRange(8, 256)
-
-
-
-        self.voyage_batch_size_spin.setValue(64)
-
-
-
-        self.voyage_batch_size_spin.setSuffix(" notes/batch")
-
-
-
-        self.voyage_batch_size_spin.setToolTip("Batch size for cloud APIs (Voyage, OpenAI, Cohere). With dynamic batch size on, this adapts from response time.")
-
-
-
-        cloud_batch_layout.addRow("Batch size:", self.voyage_batch_size_spin)
-
-
-
-        self.embedding_section.addWidget(self.cloud_batch_widget)
 
 
 
@@ -22521,9 +22536,8 @@ class SettingsDialog(QDialog):
 
             tabs.setCurrentWidget(search_tab)
 
-            # Scroll to the embedding section (top of the search tab)
-
-            QTimer.singleShot(200, lambda: self.embedding_section.toggle_button.setFocus())
+            # explanation: focus indexing action because provider setup now lives in API Settings.
+            QTimer.singleShot(200, lambda: self.create_embedding_btn.setFocus())
 
 
 
@@ -22990,6 +23004,15 @@ class SettingsDialog(QDialog):
 
         # Embedding engine: Voyage, OpenAI, Cohere, or Ollama (load keys, models, batch size)
 
+        # explanation: the old Search-tab provider widgets were removed; load the new API-tab controls instead.
+        if not hasattr(self, "voyage_api_key_input"):
+
+            if hasattr(self, "_load_embedding_settings"):
+
+                self._load_embedding_settings()
+
+            return
+
 
 
         engine = search_config.get('embedding_engine') or 'voyage'
@@ -23112,19 +23135,26 @@ class SettingsDialog(QDialog):
 
 
 
-        idx_emb = self.embedding_engine_combo.findData("voyage")
+        # explanation: apply the RAG shortcut through the new API-tab embedding controls.
+        if hasattr(self, "embedding_same_checkbox"):
+
+            self.embedding_same_checkbox.setChecked(False)
+
+            idx_strategy = self.embedding_strategy_combo.findData("cloud")
+
+            if idx_strategy >= 0:
+
+                self.embedding_strategy_combo.setCurrentIndex(idx_strategy)
+
+            idx_provider = self.embedding_cloud_provider_combo.findData("Voyage AI")
+
+            if idx_provider >= 0:
+
+                self.embedding_cloud_provider_combo.setCurrentIndex(idx_provider)
 
 
 
-        if idx_emb >= 0:
-
-
-
-            self.embedding_engine_combo.setCurrentIndex(idx_emb)
-
-
-
-        idx_ans = self.answer_provider_combo.findData("ollama")
+        idx_ans = self.answer_provider_combo.findData("local_server")
 
 
 
@@ -23260,49 +23290,12 @@ class SettingsDialog(QDialog):
 
     def _on_embedding_engine_changed(self):
 
-        """Binary UI: Show only the relevant settings for Cloud or Local AI."""
+        """Compatibility wrapper for the old Search-tab embedding signal."""
 
-        strategy = self.embedding_engine_combo.currentData() or "cloud"
+        # explanation: provider visibility is now owned by the API-tab embedding controls.
+        if hasattr(self, "_on_embedding_strategy_changed"):
 
-        is_cloud = (strategy == "cloud")
-
-        is_local = (strategy == "local")
-
-
-
-        if hasattr(self, "cloud_provider_widget"):
-
-            self.cloud_provider_widget.setVisible(is_cloud)
-
-
-
-        if hasattr(self, "cloud_extras_widget"):
-
-            self.cloud_extras_widget.setVisible(is_cloud)
-
-
-
-        cloud_engine = self.cloud_provider_combo.currentData() or "voyage"
-
-        self.voyage_options.setVisible(is_cloud and cloud_engine == "voyage")
-
-        self.openai_options.setVisible(is_cloud and cloud_engine == "openai")
-
-        self.cohere_options.setVisible(is_cloud and cloud_engine == "cohere")
-
-        self.cloud_batch_widget.setVisible(is_cloud)
-
-
-
-        if hasattr(self, "ollama_options"):
-
-            self.ollama_options.setVisible(is_local)
-
-
-
-        # Update status immediately based on selection
-
-        self._refresh_embedding_status()
+            self._on_embedding_strategy_changed()
 
 
 
@@ -23557,6 +23550,9 @@ class SettingsDialog(QDialog):
         """Fetch model list from Ollama and populate the embed model combo."""
 
 
+
+        # explanation: answer-provider local test ends here; old embedding-specific Ollama test was removed from this UI.
+        return
 
         base_url = (self.ollama_base_url_input.text() or "http://localhost:11434").strip()
 
@@ -26378,6 +26374,171 @@ class SettingsDialog(QDialog):
 
 
 
+    # explanation: wires all interactive signals for the embedding section.
+    def _connect_embedding_signals(self):
+        self.answer_provider_combo.currentIndexChanged.connect(self._on_answer_provider_changed)
+        self.embedding_same_checkbox.stateChanged.connect(self._on_same_provider_toggled)
+        self.embedding_strategy_combo.currentIndexChanged.connect(self._on_embedding_strategy_changed)
+        self.embedding_cloud_provider_combo.currentIndexChanged.connect(self._on_embedding_cloud_provider_changed)
+        self.embedding_cloud_api_key_input.textChanged.connect(self._on_embedding_cloud_provider_changed)
+
+    # explanation: toggles visibility between same-provider summary and independent embedding fields.
+    def _on_same_provider_toggled(self, *args):
+        same_provider = self.embedding_same_checkbox.isChecked()
+        self.embedding_same_summary_label.setVisible(same_provider)
+        self.embedding_independent_section.setVisible(not same_provider)
+        self._update_embedding_same_summary()
+        self._on_embedding_strategy_changed()
+
+    # explanation: swaps local and cloud embedding sub-fields without saving config.
+    def _on_embedding_strategy_changed(self, *args):
+        if not hasattr(self, "embedding_strategy_combo"):
+            return
+        is_independent = not self.embedding_same_checkbox.isChecked()
+        strategy = self.embedding_strategy_combo.currentData() or "cloud"
+        self.embedding_local_section.setVisible(is_independent and strategy == "local")
+        self.embedding_cloud_section.setVisible(is_independent and strategy == "cloud")
+        self._on_embedding_cloud_provider_changed()
+        self._refresh_embedding_status()
+
+    # explanation: refreshes the embedding cloud provider detection label without saving config.
+    def _on_embedding_cloud_provider_changed(self, *args):
+        if not hasattr(self, "embedding_cloud_provider_combo"):
+            return
+        provider = self.embedding_cloud_provider_combo.currentData() or "Voyage AI"
+        key = (self.embedding_cloud_api_key_input.text() or "").strip()
+        prefix = "\u2713 Detected" if key else "Detected"
+        self.embedding_cloud_detected_label.setText(f"{prefix}: {provider}")
+        self.embedding_cloud_detected_label.show()
+
+    # explanation: updates the same-provider summary and warning based on current answer settings.
+    def _update_embedding_same_summary(self):
+        if not hasattr(self, "embedding_same_summary_label"):
+            return
+        answer_choice = self.answer_provider_combo.currentData() or ""
+        if answer_choice == "local_server":
+            self.embedding_same_summary_label.setText("Using: Local Server - same local server settings as above")
+            return
+        api_key = (self.api_key_input.text() or "").strip() if hasattr(self, "api_key_input") else ""
+        detected = self.detect_provider() if api_key else ""
+        if detected == "OpenAI (GPT)":
+            self.embedding_same_summary_label.setText("Using: OpenAI - same key as above")
+        else:
+            label = detected or "selected cloud provider"
+            self.embedding_same_summary_label.setText(
+                f"{label} cannot create embeddings here. Turn this off and choose an embedding provider below."
+            )
+
+    # explanation: shows or hides the independent embedding cloud key.
+    def _toggle_embedding_cloud_key_visibility(self):
+        if self.embedding_cloud_api_key_input.echoMode() == QLineEdit.EchoMode.Password:
+            self.embedding_cloud_api_key_input.setEchoMode(QLineEdit.EchoMode.Normal)
+            self.embedding_cloud_show_key_btn.setText("Hide")
+        else:
+            self.embedding_cloud_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+            self.embedding_cloud_show_key_btn.setText("Show")
+
+    # explanation: populates all embedding UI fields from config without triggering signals.
+    def _load_embedding_settings(self):
+        config = load_config()
+        sc = config.get("search_config") or {}
+        widgets = [
+            self.embedding_same_checkbox,
+            self.embedding_strategy_combo,
+            self.embedding_cloud_provider_combo,
+            self.embedding_cloud_api_key_input,
+            self.embedding_local_url_input,
+        ]
+        for widget in widgets:
+            widget.blockSignals(True)
+        try:
+            self.embedding_same_checkbox.setChecked(bool(sc.get("embedding_same_as_answer", True)))
+            strategy = sc.get("embedding_strategy")
+            if not strategy:
+                legacy_engine = (sc.get("embedding_engine") or "").strip().lower()
+                strategy = "local" if legacy_engine in ("local", "ollama", "local_openai") else "cloud"
+            strategy_idx = self.embedding_strategy_combo.findData(strategy)
+            if strategy_idx >= 0:
+                self.embedding_strategy_combo.setCurrentIndex(strategy_idx)
+            provider = sc.get("embedding_cloud_provider")
+            if not provider:
+                legacy_engine = (sc.get("embedding_engine") or "voyage").strip().lower()
+                provider = {"openai": "OpenAI", "cohere": "Cohere"}.get(legacy_engine, "Voyage AI")
+            provider_idx = self.embedding_cloud_provider_combo.findData(provider)
+            if provider_idx < 0 and provider == "Voyage AI (Recommended)":
+                provider_idx = self.embedding_cloud_provider_combo.findData("Voyage AI")
+            if provider_idx >= 0:
+                self.embedding_cloud_provider_combo.setCurrentIndex(provider_idx)
+            cloud_key = sc.get("embedding_cloud_api_key")
+            if not cloud_key:
+                provider_id = (self.embedding_cloud_provider_combo.currentData() or "Voyage AI").lower()
+                if "openai" in provider_id:
+                    cloud_key = sc.get("openai_embedding_api_key", "")
+                elif "cohere" in provider_id:
+                    cloud_key = sc.get("cohere_api_key", "")
+                else:
+                    cloud_key = sc.get("voyage_api_key", "")
+            self.embedding_cloud_api_key_input.setText(cloud_key or "")
+            self.embedding_local_url_input.setText(
+                sc.get("embedding_local_url")
+                or sc.get("local_llm_url")
+                or sc.get("ollama_base_url")
+                or "http://localhost:11434/v1"
+            )
+        finally:
+            for widget in widgets:
+                widget.blockSignals(False)
+        self._on_same_provider_toggled()
+
+    # explanation: reads all embedding UI fields and writes to config-compatible keys.
+    def _save_embedding_settings(self):
+        same_provider = self.embedding_same_checkbox.isChecked()
+        strategy = self.embedding_strategy_combo.currentData() or "cloud"
+        provider = self.embedding_cloud_provider_combo.currentData() or "Voyage AI"
+        api_key = (self.embedding_cloud_api_key_input.text() or "").strip()
+        local_url = (self.embedding_local_url_input.text() or "").strip()
+        values = {
+            "embedding_same_as_answer": same_provider,
+            "embedding_strategy": strategy,
+            "embedding_cloud_provider": provider,
+            "embedding_cloud_api_key": api_key,
+            "embedding_local_url": local_url,
+        }
+        if not same_provider:
+            if strategy == "local":
+                values["embedding_engine"] = "local_openai"
+                values["local_llm_url"] = local_url or "http://localhost:11434/v1"
+            elif provider == "OpenAI":
+                values["embedding_engine"] = "openai"
+                values["openai_embedding_api_key"] = api_key
+            elif provider == "Cohere":
+                values["embedding_engine"] = "cohere"
+                values["cohere_api_key"] = api_key
+            else:
+                values["embedding_engine"] = "voyage"
+                values["voyage_api_key"] = api_key
+        return values
+
+    # explanation: builds a transient config from the current Answer Provider widgets for validation/tests.
+    def _config_with_current_answer_provider(self, config):
+        config = dict(config or {})
+        sc = dict(config.get("search_config") or {})
+        answer_with = self.answer_provider_combo.currentData() or ""
+        if answer_with == "local_server":
+            current_provider = (config.get("provider") or "").strip().lower()
+            config["provider"] = current_provider if current_provider in ("ollama", "local_openai") else "local_openai"
+            sc["local_llm_url"] = (self.local_llm_url.text() or "http://localhost:1234/v1").strip()
+            sc["local_llm_model"] = (self.local_llm_model.text() or "text-embedding-3-small").strip()
+        else:
+            api_key = (self.api_key_input.text() or "").strip()
+            config["api_key"] = api_key
+            config["provider"] = self.detect_provider_type(api_key) if api_key else config.get("provider", "openai")
+            if config["provider"] == "custom":
+                config["api_url"] = (self.api_url_input.text() or "").strip()
+        config["search_config"] = sc
+        return config
+
+
     def _toggle_voyage_key_visibility(self):
 
 
@@ -26693,6 +26854,11 @@ class SettingsDialog(QDialog):
 
 
 
+            # explanation: merges the new API-tab embedding fields into search_config.
+            config['search_config'].update(self._save_embedding_settings())
+
+
+
             # Preserve other config keys
 
             for k in ['saved_presets']:
@@ -26878,7 +27044,10 @@ class SettingsDialog(QDialog):
 
             'use_context_boost_cb', 'strict_relevance_cb', 'relevance_from_answer_cb',
 
-            'embedding_engine_combo', 'ollama_chat_model_combo', 'ollama_embed_model_combo',
+            'embedding_same_checkbox', 'embedding_strategy_combo',
+            'embedding_cloud_provider_combo', 'embedding_cloud_api_key_input',
+            'embedding_local_url_input', 'embedding_engine_combo',
+            'ollama_chat_model_combo', 'ollama_embed_model_combo',
 
             'enable_query_expansion_cb', 'use_ai_generic_term_detection_cb'
 
@@ -27041,6 +27210,11 @@ class SettingsDialog(QDialog):
                 self.ollama_chat_model_combo.setCurrentText(sc.get('ollama_chat_model', "llama3.2"))
 
 
+            if hasattr(self, '_load_embedding_settings'):
+
+                self._load_embedding_settings()
+
+
 
             # 5. Styling
 
@@ -27148,6 +27322,10 @@ class SettingsDialog(QDialog):
         if not sip.isdeleted(self.local_server_section):
 
             self.local_server_section.setVisible(provider == "local_server")
+
+        if hasattr(self, "_update_embedding_same_summary"):
+
+            self._update_embedding_same_summary()
 
 
 
@@ -27795,7 +27973,10 @@ class SettingsDialog(QDialog):
 
 
 
-        self.embedding_section.setVisible(method in ("embedding", "hybrid"))
+        # explanation: provider controls moved to API Settings; Search tab no longer shows the old accordion.
+        if hasattr(self, "embedding_section"):
+
+            self.embedding_section.setVisible(False)
 
 
 
@@ -27829,17 +28010,26 @@ class SettingsDialog(QDialog):
 
         try:
 
-            # Get current UI state instead of loading from disk to ensure responsiveness
+            # explanation: derive status from the new API-tab embedding controls.
+            config = load_config()
 
-            engine = self.embedding_engine_combo.currentData() or 'cloud'
+            sc = dict(config.get("search_config") or {})
 
+            if hasattr(self, "_save_embedding_settings"):
 
+                sc.update(self._save_embedding_settings())
 
-            # If in Cloud mode, find which specific provider is selected
+            config["search_config"] = sc
 
-            if engine == 'cloud':
+            config = self._config_with_current_answer_provider(config)
 
-                engine = self.cloud_provider_combo.currentData() or 'voyage'
+            valid, message = validate_embedding_config(config)
+
+            effective = get_effective_embedding_config(config)
+
+            effective_sc = effective.get("search_config") or {}
+
+            engine = (effective_sc.get("embedding_engine") or "voyage").strip().lower()
 
 
 
@@ -27847,21 +28037,30 @@ class SettingsDialog(QDialog):
 
 
 
-            if engine == 'local' or engine == 'ollama':
+            if engine in ('local_openai', 'ollama'):
 
-                base_url = self.ollama_base_url_input.text().strip() or 'http://localhost:11434'
+                base_url = (
+                    effective_sc.get("ollama_base_url")
+                    or effective_sc.get("local_llm_url")
+                    or effective_sc.get("embedding_local_url")
+                    or 'http://localhost:11434/v1'
+                )
 
-                model = self.ollama_embed_model_combo.currentText().strip() or 'nomic-embed-text'
+                model = (
+                    effective_sc.get("ollama_embed_model")
+                    or effective_sc.get("local_llm_model")
+                    or 'text-embedding-3-small'
+                )
 
                 status_text = (
 
-                    "CONNECTED: Ollama (Local AI)\n\n"
+                    "CONNECTED: Local embeddings\n\n"
 
                     f"URL: {base_url}\n"
 
                     f"Model: {model}\n\n"
 
-                    "Ensure Ollama is running ('ollama serve') and models are pulled."
+                    "Ensure the server exposes an /embeddings endpoint."
 
                 )
 
@@ -27869,7 +28068,7 @@ class SettingsDialog(QDialog):
 
             elif engine == "voyage":
 
-                api_key = self.voyage_api_key_input.text().strip()
+                api_key = (effective_sc.get("voyage_api_key") or "").strip()
 
                 if not api_key:
 
@@ -27895,9 +28094,9 @@ class SettingsDialog(QDialog):
 
             elif engine == "openai":
 
-                api_key = self.openai_embedding_api_key_input.text().strip()
+                api_key = (effective_sc.get("openai_embedding_api_key") or "").strip()
 
-                model = self.openai_embedding_model_input.text().strip() or "text-embedding-3-small"
+                model = effective_sc.get("openai_embedding_model") or "text-embedding-3-small"
 
                 if not api_key:
 
@@ -27923,7 +28122,7 @@ class SettingsDialog(QDialog):
 
             elif engine == "cohere":
 
-                api_key = self.cohere_api_key_input.text().strip()
+                api_key = (effective_sc.get("cohere_api_key") or "").strip()
 
                 if not api_key:
 
@@ -27944,6 +28143,10 @@ class SettingsDialog(QDialog):
                         "API key detected. Ready to create embeddings."
 
                     )
+
+            elif not valid:
+
+                status_text = message
 
 
 
@@ -29263,63 +29466,32 @@ if (-not $isAdmin) {{
 
 
 
-        engine = self.embedding_engine_combo.currentData() or "voyage"
+        # explanation: test the effective embedding config derived from the new API-tab controls.
+        config = load_config()
 
+        sc = dict(config.get("search_config") or {})
 
+        sc.update(self._save_embedding_settings())
 
-        sc = {
+        config["search_config"] = sc
 
+        config = self._config_with_current_answer_provider(config)
 
+        valid, validation_message = validate_embedding_config(config)
 
-            "embedding_engine": engine,
+        if not valid:
 
+            showInfo(validation_message)
 
+            return
 
-            "voyage_api_key": (self.voyage_api_key_input.text() or "").strip(),
+        effective_config = get_effective_embedding_config(config)
 
+        sc = effective_config.get("search_config") or {}
 
+        engine = sc.get("embedding_engine") or "voyage"
 
-            "voyage_embedding_model": (self.voyage_embedding_model_combo.currentData() or "voyage-3.5-lite"),
-
-
-
-            "openai_embedding_api_key": (self.openai_embedding_api_key_input.text() or "").strip(),
-
-
-
-            "openai_embedding_model": (self.openai_embedding_model_input.text() or "text-embedding-3-small").strip(),
-
-
-
-            "cohere_api_key": (self.cohere_api_key_input.text() or "").strip(),
-
-
-
-            "cohere_embedding_model": (self.cohere_embedding_model_input.text() or "embed-english-v3.0").strip(),
-
-
-
-            "voyage_batch_size": self.voyage_batch_size_spin.value(),
-
-
-
-            "ollama_base_url": (self.ollama_base_url_input.text() or "http://localhost:11434").strip(),
-
-
-
-            "ollama_embed_model": (self.ollama_embed_model_combo.currentText() or "nomic-embed-text").strip(),
-
-
-
-            "ollama_batch_size": self.ollama_batch_size_spin.value(),
-
-
-
-        }
-
-
-
-        config = {"search_config": sc}
+        config = effective_config
 
 
 
@@ -29601,63 +29773,26 @@ if (-not $isAdmin) {{
 
         sc = dict(config.get('search_config') or {})
 
-
-
-        sc['embedding_engine'] = self.embedding_engine_combo.currentData() or 'voyage'
-
-
-
-        sc['voyage_api_key'] = (self.voyage_api_key_input.text() or '').strip()
-
-
-
-        sc['voyage_embedding_model'] = (self.voyage_embedding_model_combo.currentData() or 'voyage-3.5-lite')
-
-
-
-        sc['openai_embedding_api_key'] = (self.openai_embedding_api_key_input.text() or '').strip()
-
-
-
-        sc['openai_embedding_model'] = (self.openai_embedding_model_input.text() or 'text-embedding-3-small').strip()
-
-
-
-        sc['cohere_api_key'] = (self.cohere_api_key_input.text() or '').strip()
-
-
-
-        sc['cohere_embedding_model'] = (self.cohere_embedding_model_input.text() or 'embed-english-v3.0').strip()
-
-
-
-        sc['voyage_batch_size'] = int(self.voyage_batch_size_spin.value())
-
-
-
-        sc['ollama_base_url'] = (self.ollama_base_url_input.text() or "http://localhost:11434").strip()
-
-
-
-        sc['ollama_embed_model'] = (self.ollama_embed_model_combo.currentText() or "nomic-embed-text").strip()
-
-
-
-        sc['ollama_batch_size'] = int(self.ollama_batch_size_spin.value())
-
-
-
-        sc['use_dynamic_batch_size'] = self.use_dynamic_batch_size_cb.isChecked()
-
-
+        # explanation: persist the new API-tab embedding settings before the worker starts.
+        sc.update(self._save_embedding_settings())
 
         config['search_config'] = sc
 
+        runtime_config = self._config_with_current_answer_provider(config)
 
+        valid, validation_message = validate_embedding_config(runtime_config)
 
-        save_config(config)  # persist batch size and embedding settings
+        if not valid:
 
+            showInfo(validation_message)
 
+            return
+
+        save_config(config)  # persist embedding settings
+
+        effective_config = get_effective_embedding_config(runtime_config)
+
+        sc = effective_config.get('search_config') or {}
 
         engine = sc.get('embedding_engine') or 'voyage'
 
@@ -29787,7 +29922,7 @@ if (-not $isAdmin) {{
 
 
 
-            test_embedding = get_embedding_for_query("Test connection")
+            test_embedding = get_embedding_for_query("Test connection", config=runtime_config)
 
 
 
@@ -29921,6 +30056,8 @@ if (-not $isAdmin) {{
 
         ntf = current_ntf
 
+        runtime_config['note_type_filter'] = current_ntf
+
 
 
 
@@ -29965,7 +30102,7 @@ if (-not $isAdmin) {{
 
 
 
-        current_engine_id = get_embedding_engine_id(config)
+        current_engine_id = get_embedding_engine_id(runtime_config)
 
 
 
@@ -30375,7 +30512,7 @@ if (-not $isAdmin) {{
 
 
 
-            ntf, note_count, checkpoint, resume_available
+            ntf, note_count, checkpoint, resume_available, config=runtime_config
 
 
 

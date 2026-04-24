@@ -350,7 +350,9 @@ def get_embeddings_via_local_openai_batch(texts, base_url="http://localhost:1234
 
 def _resolve_embedding_engine_identity(config=None):
     """Return the canonical embedding engine id plus compatible historical aliases."""
-    config = config or load_config()
+    # explanation: resolve the new embedding UX fields before reading legacy engine keys.
+    from ..utils.config import get_effective_embedding_config
+    config = get_effective_embedding_config(config or load_config())
     sc = config.get("search_config") or {}
     engine = (sc.get("embedding_engine") or "voyage").strip().lower()
 
@@ -404,7 +406,9 @@ def get_embedding_engine_candidates(config=None, engine_id=None):
 
 
 def get_embedding_for_query(text, config=None):
-    config = config or load_config()
+    # explanation: resolve same-provider and independent embedding choices into backend fields.
+    from ..utils.config import get_effective_embedding_config
+    config = get_effective_embedding_config(config or load_config())
     sc = config.get("search_config") or {}
     engine = (sc.get("embedding_engine") or "voyage").strip().lower()
 
@@ -444,7 +448,9 @@ def get_embedding_for_query(text, config=None):
 def get_embeddings_batch(texts, input_type="document", config=None):
     if not texts:
         return []
-    config = config or load_config()
+    # explanation: resolve same-provider and independent embedding choices into backend fields.
+    from ..utils.config import get_effective_embedding_config
+    config = get_effective_embedding_config(config or load_config())
     sc = config.get("search_config") or {}
     engine = (sc.get("embedding_engine") or "voyage").strip().lower()
 

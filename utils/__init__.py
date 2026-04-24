@@ -19,6 +19,8 @@ from .config import (
     load_config,
     save_config,
     get_config_value,
+    get_effective_embedding_config,
+    validate_embedding_config,
     VOYAGE_EMBEDDING_MODELS,
 )
 from .paths import (
@@ -52,6 +54,8 @@ __all__ = [
     "load_config",
     "save_config",
     "get_config_value",
+    "get_effective_embedding_config",
+    "validate_embedding_config",
     "VOYAGE_EMBEDDING_MODELS",
     "get_embeddings_storage_path",
     "get_search_history_queries",
