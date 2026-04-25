@@ -9424,7 +9424,7 @@ _AISEARCH_METHODS_FROM_WORKER = (
     '_on_ask_ai_success', '_on_ask_ai_error', '_on_ask_ai_worker_finished',
     '_rerank_with_cross_encoder', 'keyword_filter', 'keyword_filter_continue', 'get_best_model',
     'ask_ai', 'call_ollama', 'call_anthropic', 'call_openai', 'call_google', 'call_openrouter',
-    'call_custom', 'make_request', 'parse_response', '_rerank_by_relevance_to_answer', 'filter_and_display_notes', '_get_matching_terms_for_note', 'update_selection_count',
+    'call_custom', '_openai_compatible_chat_url', 'make_request', 'parse_response', '_rerank_by_relevance_to_answer', 'filter_and_display_notes', '_get_matching_terms_for_note', 'update_selection_count',
     '_start_anthropic_stream', '_append_stream_chunk', '_on_anthropic_stream_done', '_on_anthropic_stream_error',
     'on_preview_length_changed', 'toggle_select_all', 'select_all_notes', 'deselect_all_notes',
     'restore_selections', '_bring_browser_to_front', 'open_selected_in_browser', 'open_all_in_browser', 'open_in_browser',
