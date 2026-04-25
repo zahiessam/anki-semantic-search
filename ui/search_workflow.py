@@ -1647,11 +1647,59 @@ class AnthropicStreamWorker(QThread):
 
 
 
+            provider = (config.get("provider") or "").lower()
+
+
+
+            if provider in ("local_openai", "local_server", "ollama"):
+
+
+
+                self.answer_box.setText(
+
+
+
+                    "Request timed out. The local model is still too slow for this answer.\n"
+
+
+
+                    "- Try a smaller or faster local model\n"
+
+
+
+                    "- Reduce the result count or selected notes\n"
+
+
+
+                    "- Check that LM Studio is loaded and actively generating"
+
+
+
+                )
+
+
+
+                self._stop_estimated_progress_timer()
+
+
+
+                self._hide_busy_progress()
+
+
+
+                self.status_label.setText("Error occurred")
+
+
+
+                return
+
+
+
             self.answer_box.setText(
 
 
 
-                "\xe2\x8f\xb1\ufe0f Request timed out. This could mean:\n"
+                "Request timed out. This could mean:\n"
 
 
 
@@ -5573,7 +5621,9 @@ Rules:
 
 
 
-            answer, relevant_indices = self.call_custom(prompt, "", local_model, api_url, notes)
+            answer, relevant_indices = self.call_custom(
+                prompt, "", local_model, api_url, notes, timeout_seconds=300
+            )
 
 
 
@@ -6125,7 +6175,7 @@ Rules:
 
 
 
-    def call_custom(self, prompt, api_key, model, api_url, notes):
+    def call_custom(self, prompt, api_key, model, api_url, notes, timeout_seconds=30):
 
 
 
@@ -6169,7 +6219,7 @@ Rules:
 
 
 
-        response_text = self.make_request(api_url, headers, data)
+        response_text = self.make_request(api_url, headers, data, timeout_seconds=timeout_seconds)
 
 
 
@@ -6253,7 +6303,7 @@ Rules:
 
 
 
-    def make_request(self, url, headers, data):
+    def make_request(self, url, headers, data, timeout_seconds=30):
 
 
 
@@ -6305,15 +6355,15 @@ Rules:
 
 
 
-            # Use 30 second timeout (60 was too long)
+            timeout_seconds = max(1, int(timeout_seconds or 30))
 
 
 
-            log_debug("Opening URL connection (timeout: 30 seconds)...")
+            log_debug(f"Opening URL connection (timeout: {timeout_seconds} seconds)...")
 
 
 
-            with urllib.request.urlopen(req, timeout=30) as response:
+            with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
 
 
 
@@ -6449,7 +6499,7 @@ Rules:
 
 
 
-                raise Exception("Request timed out after 30 seconds. The API may be slow or overloaded.")
+                raise Exception(f"Request timed out after {timeout_seconds} seconds. The API may be slow or overloaded.")
 
 
 
