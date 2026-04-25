@@ -36,24 +36,37 @@ def get_addon_theme(is_dark=None):
     black = QColor("#000000")
     accent = highlight if highlight.isValid() else QColor("#3498db")
     accent_hover = _blend(accent, white if is_dark else black, 0.18)
-    panel_bg = _blend(window, white if is_dark else black, 0.07)
-    section_bg = _blend(window, white if is_dark else black, 0.11)
-    section_header_bg = _blend(window, white if is_dark else black, 0.08)
-    section_header_checked = _blend(window, white if is_dark else black, 0.13)
-    control_bg = QColor("#202020") if is_dark else _blend(base, white, 0.72)
-    field_row_bg = _blend(section_bg, control_bg, 0.70) if is_dark else _blend(base, black, 0.04)
-    field_row_hover_bg = _blend(field_row_bg, white if is_dark else black, 0.06)
+
+    if is_dark:
+        app_bg = _blend(window, black, 0.10)
+        panel_bg = _blend(app_bg, white, 0.08)
+        section_bg = _blend(app_bg, white, 0.045)
+        section_header_bg = _blend(app_bg, white, 0.18)
+        section_header_checked = _blend(app_bg, white, 0.23)
+        control_bg = _blend(app_bg, white, 0.145)
+        field_row_bg = _blend(app_bg, black, 0.12)
+        field_row_hover_bg = _blend(field_row_bg, white, 0.07)
+    else:
+        app_bg = window
+        panel_bg = _blend(app_bg, black, 0.07)
+        section_bg = _blend(app_bg, black, 0.11)
+        section_header_bg = _blend(app_bg, black, 0.08)
+        section_header_checked = _blend(app_bg, black, 0.13)
+        control_bg = _blend(base, white, 0.72)
+        field_row_bg = _blend(base, black, 0.04)
+        field_row_hover_bg = _blend(field_row_bg, black, 0.06)
+
     checkbox_unchecked_bg = control_bg
     checkbox_checked_bg = accent
-    control_border = QColor("#626262") if is_dark else _blend(window, black, 0.26)
-    field_row_border = _blend(control_border, window, 0.25)
-    control_hover_border = _blend(control_border, white if is_dark else black, 0.22)
-    panel_border = _blend(window, white if is_dark else black, 0.22)
-    subtle_border = _blend(window, white if is_dark else black, 0.14)
-    subtext = _blend(text, window, 0.35)
-    quiet_text = _blend(text, window, 0.52)
-    muted_btn = _blend(button, white if is_dark else black, 0.16)
-    muted_btn_hover = _blend(muted_btn, white if is_dark else black, 0.12)
+    control_border = _blend(app_bg, white, 0.32) if is_dark else _blend(app_bg, black, 0.26)
+    field_row_border = _blend(app_bg, white, 0.22) if is_dark else _blend(control_border, app_bg, 0.25)
+    control_hover_border = _blend(control_border, white if is_dark else black, 0.28)
+    panel_border = _blend(app_bg, white if is_dark else black, 0.26)
+    subtle_border = _blend(app_bg, white if is_dark else black, 0.18)
+    subtext = _blend(text, app_bg, 0.24 if is_dark else 0.35)
+    quiet_text = _blend(text, app_bg, 0.42 if is_dark else 0.52)
+    muted_btn = _blend(app_bg if is_dark else button, white if is_dark else black, 0.16)
+    muted_btn_hover = _blend(muted_btn, white if is_dark else black, 0.14)
 
     success = QColor("#2ecc71" if is_dark else "#27ae60")
     warn = QColor("#f39c12" if is_dark else "#d35400")
@@ -61,7 +74,7 @@ def get_addon_theme(is_dark=None):
     teal = QColor("#1abc9c" if is_dark else "#16a085")
 
     return {
-        "bg": _hex(window),
+        "bg": _hex(app_bg),
         "text": _hex(text),
         "subtext": _hex(subtext),
         "input_bg": _hex(base),
@@ -100,7 +113,7 @@ def get_addon_theme(is_dark=None):
         "subtle_border": _hex(subtle_border),
         "control_border": _hex(control_border),
         "control_hover_border": _hex(control_hover_border),
-        "header_bg": _hex(window),
+        "header_bg": _hex(app_bg),
         "quiet_text": _hex(quiet_text),
         "warn_bg": _rgba(warn, 0.12),
         "warn_text": _hex(warn),
@@ -112,6 +125,56 @@ def settings_dialog_stylesheet(theme):
         QDialog {{ background-color: {theme['bg']}; }}
         QLabel {{ color: {theme['text']}; }}
         QScrollArea, QScrollArea > QWidget > QWidget {{ background-color: {theme['bg']}; border: none; }}
+        QScrollArea#settingsFieldScroll {{
+            background-color: {theme['section_bg']};
+            border: 1px solid {theme['field_row_border']};
+            border-radius: 5px;
+        }}
+        QScrollArea#settingsFieldScroll > QWidget > QWidget {{
+            background-color: {theme['section_bg']};
+        }}
+        QScrollBar:vertical {{
+            background-color: {theme['bg']};
+            width: 12px;
+            margin: 0px;
+            border: none;
+        }}
+        QScrollBar::handle:vertical {{
+            background-color: {theme['control_bg']};
+            min-height: 40px;
+            border-radius: 6px;
+            border: 1px solid {theme['field_row_border']};
+        }}
+        QScrollBar::handle:vertical:hover {{
+            background-color: {theme['section_header_bg']};
+        }}
+        QScrollBar::add-line:vertical,
+        QScrollBar::sub-line:vertical {{
+            height: 0px;
+            border: none;
+            background: transparent;
+        }}
+        QScrollBar:horizontal {{
+            background-color: {theme['bg']};
+            height: 12px;
+            margin: 0px;
+            border: none;
+        }}
+        QScrollBar::handle:horizontal {{
+            background-color: {theme['control_bg']};
+            min-width: 40px;
+            border-radius: 6px;
+            border: 1px solid {theme['field_row_border']};
+        }}
+        QScrollBar::handle:horizontal:hover {{
+            background-color: {theme['section_header_bg']};
+        }}
+        QScrollBar::add-line:horizontal,
+        QScrollBar::sub-line:horizontal {{
+            width: 0px;
+            border: none;
+            background: transparent;
+        }}
         QLineEdit, QTextEdit, QPlainTextEdit {{
             min-height: 20px;
             padding: 6px 8px;
@@ -167,7 +230,16 @@ def settings_dialog_stylesheet(theme):
             border: 1px solid {theme['panel_border']};
             border-radius: 5px;
             margin-top: 10px;
-            padding-top: 10px;
+            padding: 16px 8px 8px 8px;
+            background-color: {theme['section_bg']};
+            color: {theme['text']};
+        }}
+        QGroupBox::title {{
+            subcontrol-origin: margin;
+            subcontrol-position: top left;
+            left: 10px;
+            padding: 0 4px;
+            background-color: {theme['section_bg']};
             color: {theme['text']};
         }}
         QGroupBox:disabled {{ color: {theme['subtext']}; border-color: {theme['panel_border']}; }}
@@ -218,6 +290,35 @@ def settings_dialog_stylesheet(theme):
             background-color: {theme['checkbox_checked_bg']};
             border-color: {theme['checkbox_checked_bg']};
         }}
+        QTableWidget, QTreeWidget {{
+            background-color: {theme['field_row_bg']};
+            alternate-background-color: {theme['section_bg']};
+            color: {theme['text']};
+            gridline-color: {theme['field_row_border']};
+            border: 1px solid {theme['field_row_border']};
+            border-radius: 5px;
+            selection-background-color: {theme['accent']};
+            selection-color: {theme['selected_text']};
+        }}
+        QTableWidget::item, QTreeWidget::item {{
+            padding: 4px 6px;
+            border-bottom: 1px solid {theme['field_row_border']};
+        }}
+        QTableWidget::item:hover, QTreeWidget::item:hover {{
+            background-color: {theme['field_row_hover_bg']};
+        }}
+        QHeaderView::section {{
+            background-color: {theme['section_header_bg']};
+            color: {theme['text']};
+            border: none;
+            border-right: 1px solid {theme['field_row_border']};
+            border-bottom: 1px solid {theme['field_row_border']};
+            padding: 5px 8px;
+            font-weight: bold;
+        }}
+        QSplitter::handle {{
+            background-color: {theme['bg']};
+        }}
     """
 
 
@@ -227,6 +328,15 @@ def settings_field_row_stylesheet(theme):
             background-color: {theme['field_row_bg']};
             border: 1px solid {theme['field_row_border']};
             border-radius: 5px;
+        }}
+        QFrame#settingsFieldRow QLabel,
+        QFrame#settingsFieldRow QCheckBox {{
+            color: {theme['text']};
+            background-color: transparent;
+            border: none;
+        }}
+        QFrame#settingsFieldRow QCheckBox:hover {{
+            background-color: transparent;
         }}
         QFrame#settingsFieldRow:hover {{
             background-color: {theme['field_row_hover_bg']};
@@ -279,11 +389,11 @@ def collapsible_section_content_stylesheet(theme):
 
 def settings_button_style(theme, variant="muted"):
     variants = {
-        "primary": ("accent", "accent_hover", "subtle_border"),
-        "accent": ("accent", "accent_hover", "subtle_border"),
-        "muted": ("muted_btn", "muted_btn_hover", "subtle_border"),
+        "primary": ("accent", "accent_hover", "accent_border"),
+        "accent": ("accent", "accent_hover", "accent_border"),
+        "muted": ("muted_btn", "muted_btn_hover", "control_border"),
         "success": ("success", "success_hover", "success_border"),
-        "warning": ("warning", "warning_hover", "subtle_border"),
+        "warning": ("warning", "warning_hover", "control_border"),
         "danger": ("danger", "danger_hover", "danger_border"),
     }
     bg_key, hover_key, border_key = variants.get(variant, variants["muted"])
@@ -319,7 +429,7 @@ def settings_text_style(theme, role="body"):
         "subtitle": f"font-size: 12px; color: {theme['subtext']}; margin-bottom: 10px;",
         "hint": f"font-size: 10px; color: {theme['subtext']};",
         "subtle": f"color: {theme['subtext']};",
-        "summary": f"background-color: {theme['header_bg']}; color: {theme['accent']}; padding: 8px; border-radius: 5px; font-weight: bold;",
+        "summary": f"background-color: {theme['field_row_bg']}; color: {theme['accent']}; padding: 8px; border: 1px solid {theme['field_row_border']}; border-radius: 5px; font-weight: bold;",
         "body": f"color: {theme['text']};",
     }
     return styles.get(role, styles["body"])

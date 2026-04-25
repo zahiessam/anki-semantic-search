@@ -490,10 +490,20 @@ class SettingsDialog(QDialog):
 
 
         api_tab = QWidget()
+        api_outer_layout = QHBoxLayout(api_tab)
+        api_outer_layout.setContentsMargins(0, 0, 0, 0)
+        api_outer_layout.setSpacing(0)
+        api_body = QWidget()
+        api_body.setMinimumWidth(820)
+        api_body.setMaximumWidth(1100)
+        api_body.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        api_outer_layout.addStretch(1)
+        api_outer_layout.addWidget(api_body)
+        api_outer_layout.addStretch(1)
 
 
 
-        api_layout = QVBoxLayout(api_tab)
+        api_layout = QVBoxLayout(api_body)
 
 
 
@@ -591,10 +601,6 @@ class SettingsDialog(QDialog):
 
 
 
-        # Answer with: Local vs Cloud
-
-        answer_provider_row = QFormLayout()
-
         self.answer_provider_combo = QComboBox()
 
         self.answer_provider_combo.blockSignals(True) # Silence during setup
@@ -613,10 +619,6 @@ class SettingsDialog(QDialog):
 
         )
 
-        answer_provider_row.addRow("Answer with:", self.answer_provider_combo)
-
-
-
         # Set initial value based on config
 
         current_provider = current_config.get('provider', 'openai')
@@ -633,9 +635,7 @@ class SettingsDialog(QDialog):
 
         self.answer_provider_combo.blockSignals(False) # Re-enable
 
-
-
-        api_layout.addLayout(answer_provider_row)
+        api_layout.addWidget(settings_field_row(theme, self.answer_provider_combo, "Answer with:"))
 
 
 
@@ -715,7 +715,7 @@ class SettingsDialog(QDialog):
 
 
 
-        api_key_section_layout.addLayout(key_layout)
+        api_key_section_layout.addWidget(settings_field_row(theme, layout=key_layout))
 
 
 
@@ -777,9 +777,9 @@ class SettingsDialog(QDialog):
 
         self.url_widget.hide()
 
-
-
-        api_key_section_layout.addWidget(self.url_widget)
+        self.url_row = settings_field_row(theme, self.url_widget)
+        self.url_row.hide()
+        api_key_section_layout.addWidget(self.url_row)
 
 
 
@@ -795,7 +795,9 @@ class SettingsDialog(QDialog):
 
         self.local_server_section = QWidget()
 
-        local_server_layout = QFormLayout(self.local_server_section)
+        local_server_layout = QVBoxLayout(self.local_server_section)
+        local_server_layout.setContentsMargins(0, 0, 0, 0)
+        local_server_layout.setSpacing(8)
 
 
 
@@ -803,7 +805,7 @@ class SettingsDialog(QDialog):
 
         self.local_llm_url.setPlaceholderText("http://localhost:11434 (Ollama) or http://localhost:1234/v1 (LM Studio)")
 
-        local_server_layout.addRow("Server URL:", self.local_llm_url)
+        local_server_layout.addWidget(settings_field_row(theme, self.local_llm_url, "Server URL:"))
 
 
 
@@ -827,7 +829,7 @@ class SettingsDialog(QDialog):
 
 
 
-        local_server_layout.addRow("Model Name:", model_row)
+        local_server_layout.addWidget(settings_field_row(theme, layout=model_row, label="Model Name:"))
 
 
 
@@ -837,7 +839,7 @@ class SettingsDialog(QDialog):
 
         self.local_server_test_btn.clicked.connect(self._test_local_server_connection)
 
-        local_server_layout.addRow("", self.local_server_test_btn)
+        local_server_layout.addWidget(settings_field_row(theme, self.local_server_test_btn))
 
 
 
@@ -853,7 +855,7 @@ class SettingsDialog(QDialog):
 
         local_guide.setStyleSheet(settings_text_style(theme, "hint"))
 
-        local_server_layout.addRow("", local_guide)
+        local_server_layout.addWidget(settings_field_row(theme, local_guide))
 
 
 
@@ -896,7 +898,7 @@ class SettingsDialog(QDialog):
 
         self.embedding_same_checkbox.setChecked(True)
 
-        api_layout.addWidget(self.embedding_same_checkbox)
+        api_layout.addWidget(settings_field_row(theme, self.embedding_same_checkbox))
 
 
 
@@ -920,23 +922,19 @@ class SettingsDialog(QDialog):
 
 
 
-        embedding_strategy_row = QFormLayout()
-
         self.embedding_strategy_combo = QComboBox()
 
         self.embedding_strategy_combo.addItem("\U0001f4bb Local Server (Ollama, LM Studio, Jan)", "local")
 
         self.embedding_strategy_combo.addItem("\u2601\ufe0f Cloud API (Voyage, OpenAI, Cohere)", "cloud")
 
-        embedding_strategy_row.addRow("Embedding with:", self.embedding_strategy_combo)
-
-        embedding_independent_layout.addLayout(embedding_strategy_row)
+        embedding_independent_layout.addWidget(settings_field_row(theme, self.embedding_strategy_combo, "Embedding with:"))
 
 
 
         self.embedding_local_section = QWidget()
 
-        embedding_local_layout = QFormLayout(self.embedding_local_section)
+        embedding_local_layout = QVBoxLayout(self.embedding_local_section)
 
         embedding_local_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -944,13 +942,13 @@ class SettingsDialog(QDialog):
 
         self.embedding_local_url_input.setPlaceholderText("http://localhost:11434/v1")
 
-        embedding_local_layout.addRow("Server URL:", self.embedding_local_url_input)
+        embedding_local_layout.addWidget(settings_field_row(theme, self.embedding_local_url_input, "Server URL:"))
 
         embedding_local_hint = QLabel("Must expose an /embeddings endpoint")
 
         embedding_local_hint.setStyleSheet(settings_text_style(theme, "hint"))
 
-        embedding_local_layout.addRow("", embedding_local_hint)
+        embedding_local_layout.addWidget(settings_field_row(theme, embedding_local_hint))
 
         embedding_independent_layout.addWidget(self.embedding_local_section)
 
@@ -958,7 +956,7 @@ class SettingsDialog(QDialog):
 
         self.embedding_cloud_section = QWidget()
 
-        embedding_cloud_layout = QFormLayout(self.embedding_cloud_section)
+        embedding_cloud_layout = QVBoxLayout(self.embedding_cloud_section)
 
         embedding_cloud_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -970,7 +968,7 @@ class SettingsDialog(QDialog):
 
         self.embedding_cloud_provider_combo.addItem("Cohere", "Cohere")
 
-        embedding_cloud_layout.addRow("Cloud Provider:", self.embedding_cloud_provider_combo)
+        embedding_cloud_layout.addWidget(settings_field_row(theme, self.embedding_cloud_provider_combo, "Cloud Provider:"))
 
 
 
@@ -992,7 +990,7 @@ class SettingsDialog(QDialog):
 
         embedding_key_row.addWidget(self.embedding_cloud_show_key_btn)
 
-        embedding_cloud_layout.addRow("API Key:", embedding_key_row)
+        embedding_cloud_layout.addWidget(settings_field_row(theme, layout=embedding_key_row))
 
 
 
@@ -1000,7 +998,7 @@ class SettingsDialog(QDialog):
 
         self.embedding_cloud_detected_label.setStyleSheet(settings_text_style(theme, "summary"))
 
-        embedding_cloud_layout.addRow("", self.embedding_cloud_detected_label)
+        embedding_cloud_layout.addWidget(settings_field_row(theme, self.embedding_cloud_detected_label))
 
         embedding_independent_layout.addWidget(self.embedding_cloud_section)
 
@@ -1131,10 +1129,20 @@ class SettingsDialog(QDialog):
 
 
         style_tab = QWidget()
+        style_outer_layout = QHBoxLayout(style_tab)
+        style_outer_layout.setContentsMargins(0, 0, 0, 0)
+        style_outer_layout.setSpacing(0)
+        style_body = QWidget()
+        style_body.setMinimumWidth(760)
+        style_body.setMaximumWidth(980)
+        style_body.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        style_outer_layout.addStretch(1)
+        style_outer_layout.addWidget(style_body)
+        style_outer_layout.addStretch(1)
 
 
 
-        style_layout = QVBoxLayout(style_tab)
+        style_layout = QVBoxLayout(style_body)
 
 
 
@@ -1191,6 +1199,7 @@ class SettingsDialog(QDialog):
 
 
         font_layout = QVBoxLayout(font_group)
+        font_layout.setSpacing(8)
 
 
 
@@ -1234,7 +1243,7 @@ class SettingsDialog(QDialog):
 
 
 
-        font_layout.addLayout(question_font_layout)
+        font_layout.addWidget(settings_field_row(theme, layout=question_font_layout))
 
 
 
@@ -1278,7 +1287,7 @@ class SettingsDialog(QDialog):
 
 
 
-        font_layout.addLayout(answer_font_layout)
+        font_layout.addWidget(settings_field_row(theme, layout=answer_font_layout))
 
 
 
@@ -1322,7 +1331,7 @@ class SettingsDialog(QDialog):
 
 
 
-        font_layout.addLayout(notes_font_layout)
+        font_layout.addWidget(settings_field_row(theme, layout=notes_font_layout))
 
 
 
@@ -1366,7 +1375,7 @@ class SettingsDialog(QDialog):
 
 
 
-        font_layout.addLayout(label_font_layout)
+        font_layout.addWidget(settings_field_row(theme, layout=label_font_layout))
 
 
 
@@ -1391,6 +1400,7 @@ class SettingsDialog(QDialog):
 
 
         window_layout = QVBoxLayout(window_group)
+        window_layout.setSpacing(8)
 
 
 
@@ -1434,7 +1444,7 @@ class SettingsDialog(QDialog):
 
 
 
-        window_layout.addLayout(width_layout)
+        window_layout.addWidget(settings_field_row(theme, layout=width_layout))
 
 
 
@@ -1478,7 +1488,7 @@ class SettingsDialog(QDialog):
 
 
 
-        window_layout.addLayout(height_layout)
+        window_layout.addWidget(settings_field_row(theme, layout=height_layout))
 
 
 
@@ -1503,6 +1513,7 @@ class SettingsDialog(QDialog):
 
 
         layout_layout = QVBoxLayout(layout_group)
+        layout_layout.setSpacing(8)
 
 
 
@@ -1538,7 +1549,7 @@ class SettingsDialog(QDialog):
 
 
 
-        layout_layout.addLayout(layout_row)
+        layout_layout.addWidget(settings_field_row(theme, layout=layout_row))
 
 
 
@@ -1559,6 +1570,7 @@ class SettingsDialog(QDialog):
 
 
         spacing_layout = QVBoxLayout(spacing_group)
+        spacing_layout.setSpacing(8)
 
 
 
@@ -1602,7 +1614,7 @@ class SettingsDialog(QDialog):
 
 
 
-        spacing_layout.addLayout(section_spacing_layout)
+        spacing_layout.addWidget(settings_field_row(theme, layout=section_spacing_layout))
 
 
 
@@ -1646,7 +1658,7 @@ class SettingsDialog(QDialog):
 
 
 
-        spacing_layout.addLayout(answer_spacing_layout)
+        spacing_layout.addWidget(settings_field_row(theme, layout=answer_spacing_layout))
 
 
 
@@ -2126,6 +2138,7 @@ class SettingsDialog(QDialog):
 
 
         self.fields_by_note_type_scroll = QScrollArea()
+        self.fields_by_note_type_scroll.setObjectName("settingsFieldScroll")
 
 
 
@@ -6930,6 +6943,8 @@ class SettingsDialog(QDialog):
 
 
             self.url_widget.hide()
+            if hasattr(self, "url_row"):
+                self.url_row.hide()
 
 
 
@@ -6950,6 +6965,8 @@ class SettingsDialog(QDialog):
 
 
             self.url_widget.hide()
+            if hasattr(self, "url_row"):
+                self.url_row.hide()
 
 
 
@@ -6962,6 +6979,8 @@ class SettingsDialog(QDialog):
 
 
             self.url_widget.hide()
+            if hasattr(self, "url_row"):
+                self.url_row.hide()
 
 
 
@@ -6974,6 +6993,8 @@ class SettingsDialog(QDialog):
 
 
             self.url_widget.hide()
+            if hasattr(self, "url_row"):
+                self.url_row.hide()
 
 
 
@@ -6986,6 +7007,8 @@ class SettingsDialog(QDialog):
 
 
             self.url_widget.hide()
+            if hasattr(self, "url_row"):
+                self.url_row.hide()
 
 
 
@@ -6997,6 +7020,8 @@ class SettingsDialog(QDialog):
 
 
 
+            if hasattr(self, "url_row"):
+                self.url_row.show()
             self.url_widget.show()
 
 
@@ -7339,27 +7364,27 @@ class SettingsDialog(QDialog):
 
 
 
-            from PyQt6.QtWidgets import QCheckBox, QSpinBox, QSlider, QLineEdit, QTextEdit, QComboBox
-
-
-
-            if isinstance(widget, QCheckBox):
-
-                return widget.isChecked()
-
-            if isinstance(widget, (QSpinBox, QSlider)):
-
-                return widget.value()
-
-            if isinstance(widget, (QLineEdit, QTextEdit)):
-
-                return widget.text().strip()
-
-            if isinstance(widget, QComboBox):
+            if hasattr(widget, "currentData") and hasattr(widget, "currentText"):
 
                 data = widget.currentData()
 
                 return data if data is not None else widget.currentText().strip()
+
+            if hasattr(widget, "isChecked"):
+
+                return bool(widget.isChecked())
+
+            if hasattr(widget, "value"):
+
+                return widget.value()
+
+            if hasattr(widget, "toPlainText"):
+
+                return widget.toPlainText().strip()
+
+            if hasattr(widget, "text"):
+
+                return widget.text().strip()
 
             return default_value
 

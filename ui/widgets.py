@@ -107,7 +107,6 @@ def settings_field_row(theme, content=None, label=None, layout=None, vertical=Fa
 
     if label:
         label_widget = label if isinstance(label, QLabel) else QLabel(str(label))
-        label_widget.setStyleSheet(f"color: {theme['text']}; border: none; background: transparent;")
         if not vertical:
             label_widget.setMinimumWidth(170)
         row_layout.addWidget(label_widget)
