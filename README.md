@@ -90,6 +90,7 @@ Useful controls:
 - API key input with Show/Hide.
 - Automatic provider detection.
 - Local server URL and model name.
+- Local server autodetect for running Ollama, LM Studio, or Jan instances and loaded models.
 - Local connection test.
 - Cloud embedding provider selection.
 - Embedding API key input.

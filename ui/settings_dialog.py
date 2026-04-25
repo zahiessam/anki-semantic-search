@@ -817,6 +817,14 @@ class SettingsDialog(QDialog):
 
         model_row.addWidget(self.local_llm_model)
 
+        self.local_server_autodetect_btn = QPushButton("Autodetect")
+
+        self.local_server_autodetect_btn.setToolTip("Find a running local server and select one of its loaded models.")
+
+        self.local_server_autodetect_btn.clicked.connect(self._autodetect_local_server)
+
+        model_row.addWidget(self.local_server_autodetect_btn)
+
 
 
         self.ollama_chat_refresh_btn = QPushButton("\U0001F504 Refresh")
@@ -845,11 +853,11 @@ class SettingsDialog(QDialog):
 
         local_guide = QLabel(
 
-            "ΓÇó <b>Ollama:</b> http://localhost:11434<br>"
+            "- <b>Ollama:</b> http://localhost:11434<br>"
 
-            "ΓÇó <b>LM Studio:</b> http://localhost:1234/v1<br>"
+            "- <b>LM Studio:</b> http://localhost:1234/v1<br>"
 
-            "ΓÇó <b>Jan:</b> http://localhost:1337/v1"
+            "- <b>Jan:</b> http://localhost:1337/v1"
 
         )
 
@@ -8115,6 +8123,91 @@ class SettingsDialog(QDialog):
 
 
 
+    def _autodetect_local_server(self):
+
+        """Find a running local AI server and populate URL/model fields."""
+
+        import requests
+        from aqt.utils import chooseList, tooltip
+
+        candidates = [
+            ("Ollama", "http://localhost:11434", "ollama"),
+            ("LM Studio", "http://localhost:1234/v1", "openai"),
+            ("Jan", "http://localhost:1337/v1", "openai"),
+        ]
+
+        errors = []
+
+        for name, url, kind in candidates:
+
+            try:
+
+                if kind == "ollama":
+
+                    models = get_ollama_models(url)
+
+                else:
+
+                    resp = requests.get(f"{url.rstrip('/')}/models", timeout=2)
+
+                    if resp.status_code != 200:
+
+                        errors.append(f"{name}: HTTP {resp.status_code}")
+
+                        continue
+
+                    data = resp.json()
+
+                    models = [
+                        str(item.get("id") or "").strip()
+                        for item in data.get("data", [])
+                        if isinstance(item, dict) and (item.get("id") or "").strip()
+                    ]
+
+                if not models:
+
+                    errors.append(f"{name}: connected, no models found")
+
+                    continue
+
+                self.local_llm_url.setText(url)
+
+                if len(models) == 1:
+
+                    self.local_llm_model.setText(models[0])
+
+                else:
+
+                    idx = chooseList(f"{name} detected. Select a model:", models)
+
+                    self.local_llm_model.setText(models[idx] if idx >= 0 else models[0])
+
+                provider_idx = self.answer_provider_combo.findData("local_server")
+
+                if provider_idx >= 0:
+
+                    self.answer_provider_combo.setCurrentIndex(provider_idx)
+
+                if hasattr(self, "_on_answer_provider_changed"):
+
+                    self._on_answer_provider_changed()
+
+                tooltip(f"Detected {name}. Server and model fields updated.")
+
+                return
+
+            except Exception as exc:
+
+                errors.append(f"{name}: {exc}")
+
+        showInfo(
+            "No running local AI server was detected.\n\n"
+            "Start Ollama, LM Studio, or Jan, then click Autodetect again.\n\n"
+            + "\n".join(errors[:3])
+        )
+
+
+
     def _test_local_server_connection(self):
 
         """Unified test for local server (Ollama, LM Studio, etc.)"""
@@ -8151,15 +8244,15 @@ class SettingsDialog(QDialog):
 
             if resp.status_code == 200:
 
-                showInfo(f"Γ£à Connection successful!\n\nLatency: {elapsed:.0f}ms\nServer: {url}")
+                showInfo(f"OK: Connection successful.\n\nLatency: {elapsed:.0f}ms\nServer: {url}")
 
             else:
 
-                showInfo(f"ΓÜá∩╕Å Server responded with code {resp.status_code}.\nURL: {test_url}")
+                showInfo(f"Warning: Server responded with code {resp.status_code}.\nURL: {test_url}")
 
         except Exception as e:
 
-            showInfo(f"Γ¥î Connection failed.\n\nError: {e}\n\nMake sure your server is running at {url}")
+            showInfo(f"Error: Connection failed.\n\nError: {e}\n\nMake sure your server is running at {url}")
 
 
 
@@ -10026,7 +10119,7 @@ if (-not $isAdmin) {{
 
 
 
-                    f"Γ¥î Failed to start service!\n\n"
+                    f"Error: Failed to start service.\n\n"
 
 
 
@@ -10670,7 +10763,7 @@ if (-not $isAdmin) {{
 
 
 
-                    f"Γ¥î Cannot reach Ollama at {base_url}\n\n"
+                    f"Error: Cannot reach Ollama at {base_url}\n\n"
 
 
 
@@ -10766,7 +10859,7 @@ if (-not $isAdmin) {{
 
 
 
-                    f"Γ¥î Cannot use embeddings API!\n\n"
+                    f"Error: Cannot use embeddings API.\n\n"
 
 
 
