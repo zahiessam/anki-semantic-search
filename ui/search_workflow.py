@@ -737,7 +737,7 @@ class AnthropicStreamWorker(QThread):
 
 
 
-            self.answer_box.setText(f"\xe2\x9d\u0152 Error after embedding search:\n{str(e)}")
+            self.answer_box.setText(f"Error after embedding search:\n{str(e)}")
 
 
 
@@ -941,7 +941,7 @@ class AnthropicStreamWorker(QThread):
 
 
 
-        self.answer_box.setText(f"\xe2\x9d\u0152 Embedding search failed:\n{error_msg}")
+        self.answer_box.setText(f"Embedding search failed:\n{error_msg}")
 
 
 
@@ -1719,7 +1719,7 @@ class AnthropicStreamWorker(QThread):
 
 
 
-                "\xe2\x9d\u0152 Cannot reach Ollama.\n\n"
+                "Error: Cannot reach Ollama.\n\n"
 
 
 
@@ -1735,7 +1735,7 @@ class AnthropicStreamWorker(QThread):
 
 
 
-            self.answer_box.setText(f"\xe2\x9d\u0152 Error calling AI API:\n{error_msg}\n\nPlease check your API key and internet connection.")
+            self.answer_box.setText(f"Error calling AI API:\n{error_msg}\n\nPlease check your API key and internet connection.")
 
 
 
@@ -2435,7 +2435,7 @@ class AnthropicStreamWorker(QThread):
 
 
 
-                f"Γ¥î Unexpected Error:\n{str(e)}\n\n"
+                f"Unexpected Error:\n{str(e)}\n\n"
 
 
 
@@ -5543,6 +5543,40 @@ Rules:
 
 
 
+        elif provider in ("local_openai", "local_server"):
+
+
+
+            sc = config.get('search_config') or {}
+
+
+
+            base_url = (
+                sc.get('local_llm_url')
+                or config.get('local_llm_url')
+                or config.get('api_url')
+                or 'http://localhost:1234/v1'
+            ).strip()
+
+
+
+            local_model = (
+                sc.get('local_llm_model')
+                or config.get('local_llm_model')
+                or model
+                or 'local-model'
+            ).strip()
+
+
+
+            api_url = self._openai_compatible_chat_url(base_url)
+
+
+
+            answer, relevant_indices = self.call_custom(prompt, "", local_model, api_url, notes)
+
+
+
         else:
 
 
@@ -6180,6 +6214,42 @@ Rules:
 
 
 
+
+
+
+    def _openai_compatible_chat_url(self, base_url):
+
+
+
+        """Return a chat-completions endpoint for OpenAI-compatible servers."""
+
+
+
+        url = (base_url or '').strip()
+
+
+
+        if not url:
+
+
+
+            raise ValueError("Local server URL is empty. Set it in Settings > API Settings.")
+
+
+
+        url = url.rstrip("/")
+
+
+
+        if url.endswith("/chat/completions"):
+
+
+
+            return url
+
+
+
+        return url + "/chat/completions"
 
 
 
@@ -6989,7 +7059,7 @@ Rules:
 
 
 
-        self.answer_box.setText(f"\xe2\x9d\u0152 Error calling Anthropic API:\n{error_msg}\n\nCheck your API key and internet connection.")
+        self.answer_box.setText(f"Error calling Anthropic API:\n{error_msg}\n\nCheck your API key and internet connection.")
 
 
 
@@ -8480,7 +8550,7 @@ Rules:
 
 
 
-                    self.sensitivity_value_label.setText(f"ΓëÑ{effective_pct}%")
+                    self.sensitivity_value_label.setText(f">={effective_pct}%")
 
 
 
