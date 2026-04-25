@@ -8235,6 +8235,7 @@ class SettingsDialog(QDialog):
             # If it's Ollama, use its tags endpoint; otherwise try /models
 
             test_url = f"{url.rstrip('/')}/api/tags" if "11434" in url else f"{url.rstrip('/')}/models"
+            log_debug(f"Testing local server connection: {test_url}")
 
             resp = requests.get(test_url, timeout=5)
 
@@ -8253,50 +8254,6 @@ class SettingsDialog(QDialog):
         except Exception as e:
 
             showInfo(f"Error: Connection failed.\n\nError: {e}\n\nMake sure your server is running at {url}")
-
-
-
-        base_url = (self.ollama_base_url_input.text() or "http://localhost:11434").strip()
-
-
-
-        try:
-
-
-
-            t0 = time.perf_counter()
-
-
-
-            names = get_ollama_models(base_url)
-
-
-
-            elapsed_ms = int((time.perf_counter() - t0) * 1000)
-
-
-
-            if names:
-
-
-
-                showInfo(f"\u2705 Ollama connection OK\n\nLatency: {elapsed_ms} ms\nModels: {len(names)} available")
-
-
-
-            else:
-
-
-
-                showInfo("\xe2\u0161\xa0\ufe0f Ollama responded but no models found. Run 'ollama pull <model>' to install.")
-
-
-
-        except Exception as e:
-
-
-
-            showInfo(f"\xe2\x9d\u0152 Ollama test failed\n\nError: {e}\n\nMake sure Ollama is running (ollama serve) and the URL is correct.")
 
 
 
