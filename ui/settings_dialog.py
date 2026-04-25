@@ -1,4 +1,4 @@
-"""Settings dialog UI for configuring search, embeddings, and providers."""
+﻿"""Settings dialog UI for configuring search, embeddings, and providers."""
 
 # ============================================================================
 # Imports
@@ -22,8 +22,15 @@ from aqt.qt import *
 from aqt.utils import showInfo, showText, tooltip
 
 from .dependency_install import _resolve_external_python_exe, install_dependencies
-from .theme import get_addon_theme
-from .widgets import CollapsibleSection
+from .theme import (
+    get_addon_theme,
+    settings_button_style,
+    settings_dialog_stylesheet,
+    settings_panel_style,
+    settings_status_label_style,
+    settings_text_style,
+)
+from .widgets import CollapsibleSection, settings_field_row
 from ..core.engine import (
     analyze_note_eligibility,
     clear_checkpoint,
@@ -57,6 +64,7 @@ from ..utils import (
 # ============================================================================
 
 _addon_theme = get_addon_theme
+
 
 class SettingsDialog(QDialog):
 
@@ -168,207 +176,7 @@ class SettingsDialog(QDialog):
 
 
 
-        self.setStyleSheet(
-
-
-
-            f"""
-
-
-
-            QDialog {{ background-color: {theme['bg']}; }}
-
-
-
-            QLabel {{ color: {theme['text']}; }}
-
-
-
-            QLineEdit, QTextEdit, QPlainTextEdit {{
-
-
-
-                padding: 8px;
-
-
-
-                border: 2px solid {theme['border']};
-
-
-
-                border-radius: 6px;
-
-
-
-                background-color: {theme['input_bg']};
-
-
-
-                color: {theme['input_text']};
-
-
-
-                font-size: 12px;
-
-
-
-            }}
-
-
-
-            QPushButton {{ padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 12px; color: white; }}
-
-
-
-            QPushButton#saveBtn {{ background-color: {theme['success']}; border: none; }}
-
-
-
-            QPushButton#saveBtn:hover {{ background-color: {theme['success_hover']}; }}
-
-
-
-            QPushButton#cancelBtn {{ background-color: {theme['muted_btn']}; border: none; }}
-
-
-
-            QPushButton#cancelBtn:hover {{ background-color: {theme['muted_btn_hover']}; }}
-
-
-
-            QComboBox {{
-
-
-
-                padding: 8px;
-
-
-
-                border: 2px solid {theme['border']};
-
-
-
-                border-radius: 6px;
-
-
-
-                background-color: {theme['input_bg']};
-
-
-
-                color: {theme['input_text']};
-
-
-
-            }}
-
-
-
-            QGroupBox {{
-
-
-
-                font-weight: bold;
-
-
-
-                border: 2px solid {theme['border']};
-
-
-
-                border-radius: 5px;
-
-
-
-                margin-top: 10px;
-
-
-
-                padding-top: 10px;
-
-
-
-                color: {theme['text']};
-
-
-
-            }}
-
-
-
-            QGroupBox:disabled {{ color: {theme['subtext']}; border-color: {theme['panel_border']}; }}
-
-
-
-            QSpinBox {{
-
-
-
-                padding: 5px;
-
-
-
-                border: 2px solid {theme['border']};
-
-
-
-                border-radius: 4px;
-
-
-
-                background-color: {theme['input_bg']};
-
-
-
-                color: {theme['input_text']};
-
-
-
-            }}
-
-
-
-            QTabWidget::pane {{ border: 1px solid {theme['panel_border']}; background-color: {theme['bg']}; }}
-
-
-
-            QTabBar::tab {{
-
-
-
-                background-color: {theme['input_bg']};
-
-
-
-                color: {theme['text']};
-
-
-
-                padding: 8px 16px;
-
-
-
-                border-top-left-radius: 4px;
-
-
-
-                border-top-right-radius: 4px;
-
-
-
-            }}
-
-
-
-            QTabBar::tab:selected {{ background-color: {theme['accent']}; color: #ffffff; }}
-
-
-
-            """
-
-
-
-        )
+        self.setStyleSheet(settings_dialog_stylesheet(theme))
 
 
 
@@ -488,6 +296,8 @@ class SettingsDialog(QDialog):
                 if hasattr(self, "_update_rerank_tooltip") and not sip.isdeleted(self):
 
                     self._update_rerank_tooltip()
+
+                    self._update_rerank_status_ui()
 
                 self._rerank_check_worker = None
 
@@ -707,7 +517,7 @@ class SettingsDialog(QDialog):
 
 
 
-        info.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {theme['text']}; margin-bottom: 4px;")
+        info.setStyleSheet(settings_text_style(theme, "heading"))
 
 
 
@@ -733,7 +543,7 @@ class SettingsDialog(QDialog):
 
 
 
-        subtitle.setStyleSheet(f"font-size: 11px; color: {theme['subtext']}; margin-bottom: 10px;")
+        subtitle.setStyleSheet(settings_text_style(theme, "subtitle"))
 
 
 
@@ -761,19 +571,7 @@ class SettingsDialog(QDialog):
 
 
 
-        privacy_note.setStyleSheet(
-
-
-
-            f"font-size: 11px; color: {theme['warn_text']}; margin-bottom: 10px; "
-
-
-
-            f"padding: 8px; background-color: {theme['warn_bg']}; border-radius: 4px;"
-
-
-
-        )
+        privacy_note.setStyleSheet(settings_panel_style(theme, "warning"))
 
 
 
@@ -929,15 +727,7 @@ class SettingsDialog(QDialog):
 
 
 
-        self.provider_label.setStyleSheet(
-
-
-
-            f"background-color: {theme['header_bg']}; color: {theme['accent']}; padding: 10px; border-radius: 5px; font-weight: bold;"
-
-
-
-        )
+        self.provider_label.setStyleSheet(settings_text_style(theme, "summary"))
 
 
 
@@ -1061,7 +851,7 @@ class SettingsDialog(QDialog):
 
         )
 
-        local_guide.setStyleSheet("font-size: 10px; color: #7f8c8d;")
+        local_guide.setStyleSheet(settings_text_style(theme, "hint"))
 
         local_server_layout.addRow("", local_guide)
 
@@ -1086,7 +876,7 @@ class SettingsDialog(QDialog):
 
         embedding_header = QLabel("\U0001F50D Embedding Provider")
 
-        embedding_header.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {theme['text']};")
+        embedding_header.setStyleSheet(settings_text_style(theme, "section_heading"))
 
         api_layout.addWidget(embedding_header)
 
@@ -1096,7 +886,7 @@ class SettingsDialog(QDialog):
 
         embedding_subtitle.setWordWrap(True)
 
-        embedding_subtitle.setStyleSheet(f"font-size: 11px; color: {theme['subtext']}; margin-bottom: 4px;")
+        embedding_subtitle.setStyleSheet(settings_text_style(theme, "subtle"))
 
         api_layout.addWidget(embedding_subtitle)
 
@@ -1114,11 +904,7 @@ class SettingsDialog(QDialog):
 
         self.embedding_same_summary_label.setWordWrap(True)
 
-        self.embedding_same_summary_label.setStyleSheet(
-
-            f"background-color: {theme['header_bg']}; color: {theme['accent']}; padding: 8px; border-radius: 5px; font-weight: bold;"
-
-        )
+        self.embedding_same_summary_label.setStyleSheet(settings_text_style(theme, "summary"))
 
         api_layout.addWidget(self.embedding_same_summary_label)
 
@@ -1162,7 +948,7 @@ class SettingsDialog(QDialog):
 
         embedding_local_hint = QLabel("Must expose an /embeddings endpoint")
 
-        embedding_local_hint.setStyleSheet(f"font-size: 10px; color: {theme['subtext']};")
+        embedding_local_hint.setStyleSheet(settings_text_style(theme, "hint"))
 
         embedding_local_layout.addRow("", embedding_local_hint)
 
@@ -1212,11 +998,7 @@ class SettingsDialog(QDialog):
 
         self.embedding_cloud_detected_label = QLabel()
 
-        self.embedding_cloud_detected_label.setStyleSheet(
-
-            f"background-color: {theme['header_bg']}; color: {theme['accent']}; padding: 8px; border-radius: 5px; font-weight: bold;"
-
-        )
+        self.embedding_cloud_detected_label.setStyleSheet(settings_text_style(theme, "summary"))
 
         embedding_cloud_layout.addRow("", self.embedding_cloud_detected_label)
 
@@ -1256,7 +1038,7 @@ class SettingsDialog(QDialog):
 
 
 
-        self.info_text.setStyleSheet("background-color: #f0f0f0; color: #333333; padding: 10px; border-radius: 5px; font-size: 11px;")
+        self.info_text.setStyleSheet(settings_panel_style(theme))
 
 
 
@@ -1372,7 +1154,7 @@ class SettingsDialog(QDialog):
 
 
 
-        style_info.setStyleSheet("font-size: 15px; font-weight: bold; color: #2c3e50; margin-bottom: 4px;")
+        style_info.setStyleSheet(settings_text_style(theme, "heading"))
 
 
 
@@ -1388,7 +1170,7 @@ class SettingsDialog(QDialog):
 
 
 
-        style_sub.setStyleSheet("font-size: 11px; color: #7f8c8d; margin-bottom: 10px;")
+        style_sub.setStyleSheet(settings_text_style(theme, "subtitle"))
 
 
 
@@ -1936,11 +1718,11 @@ class SettingsDialog(QDialog):
 
 
 
-        nt_info.setStyleSheet("font-size: 11px; color: #7f8c8d; margin-bottom: 6px;")
+        nt_info.setStyleSheet(f"font-size: 11px; color: {theme['subtext']}; margin-bottom: 6px;")
 
 
 
-        nt_info.setStyleSheet("font-size: 15px; font-weight: bold; color: #2c3e50; margin-bottom: 6px;")
+        nt_info.setStyleSheet(f"font-size: 17px; font-weight: bold; color: {theme['text']}; margin-bottom: 6px;")
 
 
 
@@ -2125,6 +1907,13 @@ class SettingsDialog(QDialog):
 
 
         self.note_types_table.sortByColumn(1, Qt.SortOrder.DescendingOrder)  # Sort by count descending by default
+
+
+
+        header = self.note_types_table.horizontalHeader()
+        header.sortIndicatorChanged.connect(
+            lambda _column, _order: QTimer.singleShot(0, self._sync_field_groups_to_note_type_order)
+        )
 
 
 
@@ -2640,7 +2429,7 @@ class SettingsDialog(QDialog):
 
         search_info = QLabel("\U0001F50D Search & embeddings")
 
-        search_info.setStyleSheet("font-size: 15px; font-weight: bold; color: #2c3e50; margin-bottom: 2px;")
+        search_info.setStyleSheet(settings_text_style(theme, "heading"))
 
         search_layout.addWidget(search_info)
 
@@ -2650,7 +2439,7 @@ class SettingsDialog(QDialog):
 
         search_sub.setWordWrap(True)
 
-        search_sub.setStyleSheet("font-size: 11px; color: #7f8c8d; margin-bottom: 5px;")
+        search_sub.setStyleSheet(settings_text_style(theme, "subtitle"))
 
         search_layout.addWidget(search_sub)
 
@@ -2664,7 +2453,7 @@ class SettingsDialog(QDialog):
 
         self.medical_reset_btn.setToolTip("Sets all search, relevance, and AI settings to high-yield medical defaults (Resident-approved).")
 
-        self.medical_reset_btn.setStyleSheet("background-color: #2c3e50; color: #ecf0f1; border: 1px solid #34495e; padding: 10px; font-weight: bold;")
+        self.medical_reset_btn.setStyleSheet(settings_button_style(theme, "muted"))
 
         self.medical_reset_btn.clicked.connect(self.reset_to_medical_defaults)
 
@@ -2678,15 +2467,17 @@ class SettingsDialog(QDialog):
 
         index_zone = QFrame()
 
-        index_zone.setStyleSheet("QFrame { background-color: #2c3e50; border-radius: 6px; border: 1px solid #3498db; }")
+        index_zone.setStyleSheet(settings_panel_style(theme, "index"))
 
         index_layout = QVBoxLayout(index_zone)
+        index_layout.setContentsMargins(12, 10, 12, 12)
+        index_layout.setSpacing(8)
 
 
 
         self.embedding_status_label = QLabel("Ready to index...")
 
-        self.embedding_status_label.setStyleSheet("color: #ecf0f1; font-weight: bold; border: none;")
+        self.embedding_status_label.setStyleSheet(f"color: {theme['text']}; font-weight: bold; border: none;")
 
         self.embedding_status_label.setWordWrap(True)
 
@@ -2695,12 +2486,13 @@ class SettingsDialog(QDialog):
 
 
         index_btns = QHBoxLayout()
+        index_btns.setSpacing(8)
 
         self.create_embedding_btn = QPushButton("Create/Update Embeddings")
 
         self.create_embedding_btn.setToolTip(EmbeddingsTabMessages.CREATE_UPDATE_TOOLTIP)
 
-        self.create_embedding_btn.setStyleSheet("QPushButton { background-color: #3498db; color: white; padding: 8px; font-weight: bold; border: none; } QPushButton:hover { background-color: #2980b9; }")
+        self.create_embedding_btn.setStyleSheet(settings_button_style(theme, "primary"))
 
         self.create_embedding_btn.clicked.connect(self._create_or_update_embeddings)
 
@@ -2710,7 +2502,7 @@ class SettingsDialog(QDialog):
 
         self.review_ineligible_btn.setToolTip("Open notes excluded from embeddings by the current deck, note type, and field filters.")
 
-        self.review_ineligible_btn.setStyleSheet("QPushButton { background-color: #5d6d7e; color: white; padding: 8px; border: none; }")
+        self.review_ineligible_btn.setStyleSheet(settings_button_style(theme, "muted"))
 
         self.review_ineligible_btn.clicked.connect(self._review_ineligible_notes)
 
@@ -2722,7 +2514,7 @@ class SettingsDialog(QDialog):
 
         self.test_connection_btn.setToolTip(EmbeddingsTabMessages.TEST_CONNECTION_TOOLTIP)
 
-        self.test_connection_btn.setStyleSheet("QPushButton { background-color: #7f8c8d; color: white; padding: 8px; border: none; }")
+        self.test_connection_btn.setStyleSheet(settings_button_style(theme, "muted"))
 
         self.test_connection_btn.clicked.connect(self._test_embedding_connection)
 
@@ -2756,7 +2548,7 @@ class SettingsDialog(QDialog):
 
         self.search_method_combo.currentIndexChanged.connect(self._on_search_method_changed)
 
-        strategy_section.addWidget(self.search_method_combo)
+        strategy_section.addWidget(settings_field_row(theme, self.search_method_combo))
 
         search_layout.addWidget(strategy_section)
 
@@ -2768,15 +2560,17 @@ class SettingsDialog(QDialog):
 
         self.enable_query_expansion_cb = QCheckBox("Query Expansion (AI adds medical synonyms)")
 
-        ai_retrieval_section.addWidget(self.enable_query_expansion_cb)
+        ai_retrieval_section.addWidget(settings_field_row(theme, self.enable_query_expansion_cb))
 
         self.use_ai_generic_term_detection_cb = QCheckBox("Filter Filler Words (AI detects generic terms)")
 
-        ai_retrieval_section.addWidget(self.use_ai_generic_term_detection_cb)
+        ai_retrieval_section.addWidget(settings_field_row(theme, self.use_ai_generic_term_detection_cb))
 
         self.enable_hyde_cb = QCheckBox("HyDE (AI generates hypothetical document first)")
 
-        ai_retrieval_section.addWidget(self.enable_hyde_cb)
+        self.enable_hyde_row = settings_field_row(theme, self.enable_hyde_cb)
+
+        ai_retrieval_section.addWidget(self.enable_hyde_row)
 
         search_layout.addWidget(ai_retrieval_section)
 
@@ -2786,19 +2580,23 @@ class SettingsDialog(QDialog):
 
         accuracy_section = CollapsibleSection("Clinical Accuracy Tuning", is_expanded=False)
 
-        accuracy_form = QFormLayout()
+        accuracy_layout = QVBoxLayout()
+
+        accuracy_layout.setContentsMargins(0, 0, 0, 0)
+
+        accuracy_layout.setSpacing(8)
 
         self.min_relevance_spin = QSpinBox()
 
         self.min_relevance_spin.setRange(15, 75)
 
-        accuracy_form.addRow("Minimum Relevance Threshold:", self.min_relevance_spin)
+        accuracy_layout.addWidget(settings_field_row(theme, self.min_relevance_spin, "Minimum Relevance Threshold:"))
 
         self.max_results_spin = QSpinBox()
 
         self.max_results_spin.setRange(5, 50)
 
-        accuracy_form.addRow("Max Results Pool:", self.max_results_spin)
+        accuracy_layout.addWidget(settings_field_row(theme, self.max_results_spin, "Max Results Pool:"))
 
         self.hybrid_weight_spin = QSpinBox()
 
@@ -2806,17 +2604,19 @@ class SettingsDialog(QDialog):
 
         self.hybrid_weight_label = QLabel("Embedding Weight:")
 
-        accuracy_form.addRow(self.hybrid_weight_label, self.hybrid_weight_spin)
+        self.hybrid_weight_row = settings_field_row(theme, self.hybrid_weight_spin, self.hybrid_weight_label)
+
+        accuracy_layout.addWidget(self.hybrid_weight_row)
 
         self.relevance_from_answer_cb = QCheckBox("Relevance from answer (Rerank by AI output)")
 
-        accuracy_form.addRow("", self.relevance_from_answer_cb)
+        accuracy_layout.addWidget(settings_field_row(theme, self.relevance_from_answer_cb))
 
         self.strict_relevance_cb = QCheckBox("Strict Filter (Reduces tangential cards)")
 
-        accuracy_form.addRow("", self.strict_relevance_cb)
+        accuracy_layout.addWidget(settings_field_row(theme, self.strict_relevance_cb))
 
-        accuracy_section.addLayout(accuracy_form)
+        accuracy_section.addLayout(accuracy_layout)
 
         search_layout.addWidget(accuracy_section)
 
@@ -2826,59 +2626,59 @@ class SettingsDialog(QDialog):
 
         rerank_section = CollapsibleSection("Re-Ranking (Advanced Accuracy)", is_expanded=False)
 
-        self.enable_rerank_cb = QCheckBox("Enable Cross-Encoder Re-Ranking")
+        self.rerank_status_label = QLabel("Cross-Encoder: checking...")
+        self.rerank_status_label.setStyleSheet(settings_text_style(theme, "subtle"))
+        rerank_section.addWidget(settings_field_row(theme, self.rerank_status_label))
 
-        self.enable_rerank_cb.setEnabled(False)
-
-        rerank_section.addWidget(self.enable_rerank_cb)
-
-        rerank_btn_row = QHBoxLayout()
-
-        check_rerank_btn = QPushButton("\U0001F504 Refresh Status")
-
-        check_rerank_btn.clicked.connect(self._on_check_rerank_again)
-
-        rerank_btn_row.addWidget(check_rerank_btn)
-
-        install_deps_btn = QPushButton("\U0001F4E5 Install into Anki")
-
-        install_deps_btn.clicked.connect(lambda: install_dependencies(python_exe=None))
-
-        rerank_btn_row.addWidget(install_deps_btn)
-
-        self.install_external_btn = QPushButton("\U0001F4E5 Install into External")
-
-        self.install_external_btn.clicked.connect(self._on_install_into_external_python)
-
-        rerank_btn_row.addWidget(self.install_external_btn)
-
-        rerank_section.addLayout(rerank_btn_row)
+        rerank_hint = QLabel("Recommended: external Python avoids Anki torch/DLL issues.")
+        rerank_hint.setWordWrap(True)
+        rerank_hint.setStyleSheet(settings_text_style(theme, "subtle"))
+        rerank_section.addWidget(settings_field_row(theme, rerank_hint))
 
         self.python_path_widget = QWidget()
-
         python_path_layout = QVBoxLayout(self.python_path_widget)
+        python_path_layout.setContentsMargins(0, 0, 0, 0)
+        python_path_layout.setSpacing(8)
+
+        python_label = QLabel("Use external Python")
+        python_label.setStyleSheet("font-weight: bold;")
+        python_path_layout.addWidget(python_label)
 
         path_row = QHBoxLayout()
-
         self.rerank_python_path_input = QLineEdit()
-
+        self.rerank_python_path_input.setPlaceholderText(r"C:\Path\To\Python311\python.exe")
         path_row.addWidget(self.rerank_python_path_input)
 
-        self.autodetect_python_btn = QPushButton("\U0001F50D Autodetect")
-
+        self.autodetect_python_btn = QPushButton("Autodetect")
         self.autodetect_python_btn.clicked.connect(self._on_autodetect_python)
-
         path_row.addWidget(self.autodetect_python_btn)
 
+        self.browse_rerank_python_btn = QPushButton("Browse")
+        self.browse_rerank_python_btn.clicked.connect(self._on_browse_rerank_python)
+        path_row.addWidget(self.browse_rerank_python_btn)
         python_path_layout.addLayout(path_row)
 
-        rerank_section.addWidget(self.python_path_widget)
+        action_row = QHBoxLayout()
+        self.install_external_btn = QPushButton("Install / show command for external Python")
+        self.install_external_btn.clicked.connect(self._on_install_into_external_python)
+        action_row.addWidget(self.install_external_btn)
 
-        self.python_path_widget.setVisible(False)
+        self.check_rerank_btn = QPushButton("Check again")
+        self.check_rerank_btn.clicked.connect(self._on_check_rerank_again)
+        action_row.addWidget(self.check_rerank_btn)
+        python_path_layout.addLayout(action_row)
+
+        self.python_path_row = settings_field_row(theme, self.python_path_widget, vertical=True)
+
+        rerank_section.addWidget(self.python_path_row)
+        self.python_path_widget.setVisible(True)
+
+        self.enable_rerank_cb = QCheckBox("Improve result order with Cross-Encoder")
+        self.enable_rerank_cb.setEnabled(False)
+        rerank_section.addWidget(settings_field_row(theme, self.enable_rerank_cb))
 
         self.use_context_boost_cb = QCheckBox("Context-Aware Ranking")
-
-        rerank_section.addWidget(self.use_context_boost_cb)
+        rerank_section.addWidget(settings_field_row(theme, self.use_context_boost_cb))
 
         search_layout.addWidget(rerank_section)
 
@@ -2888,23 +2688,33 @@ class SettingsDialog(QDialog):
 
         tech_section = CollapsibleSection("Technical Diagnostics (Expert Only)", is_expanded=False)
 
-        tech_form = QFormLayout()
+        tech_layout = QVBoxLayout()
+
+        tech_layout.setContentsMargins(0, 0, 0, 0)
+
+        tech_layout.setSpacing(8)
 
         self.verbose_search_debug_cb = QCheckBox("Verbose Search Debug")
 
-        tech_form.addRow("", self.verbose_search_debug_cb)
+        tech_layout.addWidget(settings_field_row(theme, self.verbose_search_debug_cb))
 
         self.extra_stop_words_input = QLineEdit()
 
-        tech_form.addRow("Extra Stop-words:", self.extra_stop_words_input)
+        tech_layout.addWidget(settings_field_row(theme, self.extra_stop_words_input, "Extra Stop-words:"))
 
         self.context_chars_per_note_spin = QSpinBox()
 
         self.context_chars_per_note_spin.setRange(0, 5000)
 
-        tech_form.addRow("Max chars/note:", self.context_chars_per_note_spin)
+        tech_layout.addWidget(settings_field_row(theme, self.context_chars_per_note_spin, "Max chars/note:"))
 
-        tech_section.addLayout(tech_form)
+        self.install_anki_python_btn = QPushButton("Advanced: try Anki Python")
+
+        self.install_anki_python_btn.clicked.connect(lambda: install_dependencies(python_exe=None))
+
+        tech_layout.addWidget(settings_field_row(theme, self.install_anki_python_btn))
+
+        tech_section.addLayout(tech_layout)
 
         search_layout.addWidget(tech_section)
 
@@ -2933,7 +2743,7 @@ class SettingsDialog(QDialog):
 
         self.local_ai_status_label = QLabel("Scanning for local AI...")
 
-        self.local_ai_status_label.setStyleSheet("font-weight: bold; color: #f39c12;")
+        self.local_ai_status_label.setStyleSheet(f"font-weight: bold; color: {theme['warning']};")
 
         ollama_form.addRow("Detected Provider:", self.local_ai_status_label)
 
@@ -3283,6 +3093,14 @@ class SettingsDialog(QDialog):
 
 
         scroll_area.viewport().installEventFilter(self)
+
+
+
+        self._apply_settings_control_sizing(tabs)
+
+
+
+        self._install_wheel_scroll_guard(tabs)
 
 
 
@@ -3844,6 +3662,7 @@ class SettingsDialog(QDialog):
         from aqt.utils import tooltip
 
         import requests
+        theme = _addon_theme()
 
 
 
@@ -3861,7 +3680,7 @@ class SettingsDialog(QDialog):
 
                 self.local_ai_status_label.setText("Detected: Ollama (Running)")
 
-                self.local_ai_status_label.setStyleSheet("font-weight: bold; color: #27ae60;")
+                self.local_ai_status_label.setStyleSheet(f"font-weight: bold; color: {theme['success']};")
 
                 self.ollama_embed_model_combo.clear()
 
@@ -3891,7 +3710,7 @@ class SettingsDialog(QDialog):
 
                 self.local_ai_status_label.setText("Detected: LM Studio / Local Server")
 
-                self.local_ai_status_label.setStyleSheet("font-weight: bold; color: #27ae60;")
+                self.local_ai_status_label.setStyleSheet(f"font-weight: bold; color: {theme['success']};")
 
                 self.ollama_embed_model_combo.clear()
 
@@ -3909,7 +3728,7 @@ class SettingsDialog(QDialog):
 
         self.local_ai_status_label.setText("No local AI found. Defaulting to Cloud or Manual.")
 
-        self.local_ai_status_label.setStyleSheet("font-weight: bold; color: #e74c3c;")
+        self.local_ai_status_label.setStyleSheet(f"font-weight: bold; color: {theme['danger']};")
 
         tooltip("No local AI detected. Ensure Ollama or LM Studio is running.")
 
@@ -4080,7 +3899,7 @@ class SettingsDialog(QDialog):
 
 
 
-        """Forward mouse wheel over tab content (and any child widget) to scroll area."""
+        """Forward mouse wheel gestures to scrolling instead of mutating controls."""
 
 
 
@@ -4089,6 +3908,22 @@ class SettingsDialog(QDialog):
 
 
             return super().eventFilter(obj, event)
+
+
+
+        if self._is_wheel_guarded_widget(obj):
+
+
+
+            guarded_scroll_area = self._nearest_scroll_area(obj) or getattr(self, "_settings_scroll_area", None)
+
+
+
+            if guarded_scroll_area and self._scroll_area_by_wheel(guarded_scroll_area, event):
+
+
+
+                return True
 
 
 
@@ -4144,19 +3979,7 @@ class SettingsDialog(QDialog):
 
 
 
-        if scroll_area.verticalScrollBar().isVisible():
-
-
-
-            delta = event.angleDelta().y() if hasattr(event, "angleDelta") else getattr(event, "delta", 0)
-
-
-
-            sb = scroll_area.verticalScrollBar()
-
-
-
-            sb.setValue(sb.value() - delta)
+        if self._scroll_area_by_wheel(scroll_area, event):
 
 
 
@@ -4165,6 +3988,166 @@ class SettingsDialog(QDialog):
 
 
         return super().eventFilter(obj, event)
+
+
+
+    def _install_wheel_scroll_guard(self, root):
+
+
+
+        """Prevent touchpad/wheel gestures from changing settings controls."""
+
+
+
+        guarded_types = (QAbstractSpinBox, QComboBox, QSlider, QCheckBox)
+
+
+
+        self._wheel_guarded_widgets = set()
+
+
+
+        for widget in root.findChildren(guarded_types):
+
+
+
+            widget.installEventFilter(self)
+
+
+
+            self._wheel_guarded_widgets.add(widget)
+
+
+
+    def _apply_settings_control_sizing(self, root):
+
+
+
+        """Keep Settings controls readable without letting numeric fields stretch too far."""
+
+
+
+        for spin in root.findChildren(QAbstractSpinBox):
+
+
+
+            spin.setMaximumWidth(170)
+
+
+
+            spin.setMinimumWidth(90)
+
+
+
+        for combo in root.findChildren(QComboBox):
+
+
+
+            combo.setMinimumWidth(180)
+
+
+
+    def _is_wheel_guarded_widget(self, obj):
+
+
+
+        guarded = getattr(self, "_wheel_guarded_widgets", set())
+
+
+
+        target = obj
+
+
+
+        while target:
+
+
+
+            if target in guarded:
+
+
+
+                return True
+
+
+
+            target = target.parentWidget() if hasattr(target, "parentWidget") else None
+
+
+
+        return False
+
+
+
+    def _nearest_scroll_area(self, widget):
+
+
+
+        target = widget
+
+
+
+        while target:
+
+
+
+            if isinstance(target, QScrollArea):
+
+
+
+                return target
+
+
+
+            target = target.parentWidget() if hasattr(target, "parentWidget") else None
+
+
+
+        return None
+
+
+
+    def _scroll_area_by_wheel(self, scroll_area, event):
+
+
+
+        if not scroll_area or not scroll_area.verticalScrollBar().isVisible():
+
+
+
+            return False
+
+
+
+        sb = scroll_area.verticalScrollBar()
+
+
+
+        delta = event.pixelDelta().y() if hasattr(event, "pixelDelta") and not event.pixelDelta().isNull() else 0
+
+
+
+        if not delta:
+
+
+
+            delta = event.angleDelta().y() if hasattr(event, "angleDelta") else getattr(event, "delta", 0)
+
+
+
+        if not delta:
+
+
+
+            return False
+
+
+
+        sb.setValue(sb.value() - delta)
+
+
+
+        return True
 
 
 
@@ -4653,6 +4636,18 @@ class SettingsDialog(QDialog):
 
 
 
+                    cb.installEventFilter(self)
+
+
+
+                    if hasattr(self, "_wheel_guarded_widgets"):
+
+
+
+                        self._wheel_guarded_widgets.add(cb)
+
+
+
                     cbs[fn] = cb
 
 
@@ -4674,6 +4669,10 @@ class SettingsDialog(QDialog):
 
 
             self._update_field_groups_enabled()
+
+
+
+            self._sync_field_groups_to_note_type_order()
 
 
 
@@ -6117,6 +6116,49 @@ class SettingsDialog(QDialog):
 
 
 
+    def _note_type_order_from_table(self):
+        """Return note type names in the table's current visual sort order."""
+        table = getattr(self, 'note_types_table', None)
+        if table is None:
+            return []
+
+        names = []
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            if item is None:
+                continue
+            name = item.data(Qt.ItemDataRole.UserRole) or item.text().strip()
+            if name:
+                names.append(name)
+        return names
+
+    def _sync_field_groups_to_note_type_order(self):
+        """Keep field sections in the same order as the note types table."""
+        layout = getattr(self, 'fields_by_note_type_layout', None)
+        groupboxes = getattr(self, '_field_groupboxes', None)
+        if layout is None or not groupboxes:
+            return
+
+        ordered_names = self._note_type_order_from_table()
+        if not ordered_names:
+            return
+
+        while layout.count():
+            layout.takeAt(0)
+
+        added = set()
+        for model_name in ordered_names:
+            gb = groupboxes.get(model_name)
+            if gb is None:
+                continue
+            layout.addWidget(gb)
+            added.add(model_name)
+
+        for model_name, gb in groupboxes.items():
+            if model_name not in added:
+                layout.addWidget(gb)
+
+
     def _on_include_all_note_types_toggled(self):
 
 
@@ -6174,6 +6216,10 @@ class SettingsDialog(QDialog):
 
 
             self.note_types_table.sortByColumn(0, Qt.SortOrder.DescendingOrder)
+
+
+
+        self._sync_field_groups_to_note_type_order()
 
 
 
@@ -7638,7 +7684,7 @@ class SettingsDialog(QDialog):
 
             self.rerank_python_path_input.setText(candidates[0])
 
-            showInfo(f"Found Python at {candidates[0]}, but 'sentence-transformers' is not installed there yet. Click 'Install into external Python' to prepare it.")
+            showInfo(f"Found Python at {candidates[0]}, but 'sentence-transformers' is not installed there yet. Click 'Install / show command for external Python' to prepare it.")
 
 
 
@@ -8408,15 +8454,63 @@ class SettingsDialog(QDialog):
 
 
 
-                base + "Not installed. Set 'Python for Cross-Encoder' to your Python (e.g. Python 3.11) that has "
+                base + "Not installed. Use an external Python (e.g. Python 3.11) with "
 
 
 
-                "sentence-transformers, or click 'Install Dependencies' to install into Anki's Python:\n" + sys.executable
+                "sentence-transformers. This is recommended on Windows because Anki's Python may not load torch.\n"
+                "Anki's Python: " + sys.executable
 
 
 
             )
+
+
+
+
+
+    def _update_rerank_status_ui(self):
+
+
+
+        """Update the visible Cross-Encoder setup status."""
+
+
+
+        label = getattr(self, "rerank_status_label", None)
+        theme = _addon_theme()
+
+
+
+        if label is None:
+
+
+
+            return
+
+
+
+        if self._rerank_available:
+
+
+
+            label.setText("Cross-Encoder: Ready")
+
+
+
+            label.setStyleSheet(settings_status_label_style(theme, "success"))
+
+
+
+        else:
+
+
+
+            label.setText("Cross-Encoder: Needs setup")
+
+
+
+            label.setStyleSheet(settings_status_label_style(theme, "warning"))
 
 
 
@@ -8436,14 +8530,6 @@ class SettingsDialog(QDialog):
 
 
 
-        import time
-
-
-
-        t0 = time.time()
-
-
-
         python_path = (self.rerank_python_path_input.text() or '').strip() or None
 
 
@@ -8460,11 +8546,15 @@ class SettingsDialog(QDialog):
 
 
 
+        self._update_rerank_status_ui()
+
+
+
         if self._rerank_available:
 
 
 
-            showInfo("sentence-transformers is available. Cross-Encoder Re-Ranking can be enabled.")
+            showInfo("sentence-transformers is available. Cross-Encoder re-ranking can be enabled.")
 
 
 
@@ -8480,27 +8570,28 @@ class SettingsDialog(QDialog):
 
 
 
-                "Option A \u2014 Use your own Python (e.g. Python 3.11):\n"
+                "Recommended setup - Use external Python (e.g. Python 3.11):\n"
 
 
 
-                "1. Set 'Python for Cross-Encoder' above to that python.exe (or its folder).\n"
+                "1. Set 'Use external Python' to that python.exe (or its folder).\n"
 
 
 
-                "2. Click 'Install into external Python' to install sentence-transformers there.\n"
+                "2. Click 'Install / show command for external Python'.\n"
 
 
 
-                "3. Click 'Check again'.\n\n"
+                "3. Run the shown command if needed, then click 'Check again'.\n\n"
 
 
 
-                "Option B \u2014 Use Anki's Python:\n"
+                "Advanced option - Use Anki's Python:\n"
 
 
 
-                "Clear the optional path, click 'Install Dependencies', then 'Check again'.\n\n"
+                "Clear the external path and use 'Advanced: try Anki Python' in Technical Diagnostics.\n"
+                "This can fail on Windows because Anki's Python may not load torch/sentence-transformers.\n\n"
 
 
 
@@ -8520,45 +8611,53 @@ class SettingsDialog(QDialog):
 
 
 
+    def _on_browse_rerank_python(self):
+
+
+
+        """Let the user pick an external python.exe for Cross-Encoder setup."""
+
+
+
+        path, _ = QFileDialog.getOpenFileName(
+
+
+
+            self,
+
+
+
+            "Select external Python",
+
+
+
+            os.path.expanduser("~"),
+
+
+
+            "Python executable (*.exe);;All files (*)",
+
+
+
+        )
+
+
+
+        if path:
+
+
+
+            self.rerank_python_path_input.setText(path)
+
+
+
+
+
     def _on_install_into_external_python(self):
 
-        """Toggle visibility of external Python path, or install if already visible and path is set."""
-
-        # Toggle visibility
-
-        is_visible = self.python_path_widget.isVisible()
-
-
-
-        # If it was hidden, show it and try to help with autodetect
-
-        if not is_visible:
-
-            self.python_path_widget.setVisible(True)
-
-            if not self.rerank_python_path_input.text().strip():
-
-                self._on_autodetect_python()
-
-            return
-
-
-
-        # If it is already visible, but the user clicks it again without a path, hide it
+        """Show install instructions for the selected external Python."""
 
         path = (self.rerank_python_path_input.text() or '').strip()
-
-        if is_visible and not path:
-
-            self.python_path_widget.setVisible(False)
-
-            return
-
-
-
-        # If it is visible AND there is a path, proceed with installation
-
-        python_exe = _resolve_external_python_exe(path)
 
 
 
@@ -8566,7 +8665,7 @@ class SettingsDialog(QDialog):
 
 
 
-            showInfo("Enter a path in 'Python for Cross-Encoder' (python.exe or its folder), then try again.")
+            showInfo("Enter an external Python path first, or click Autodetect. Use python.exe or the folder containing it.")
 
 
 
@@ -8623,7 +8722,13 @@ class SettingsDialog(QDialog):
 
 
 
-        self.enable_hyde_cb.setVisible(method in ("embedding", "hybrid"))
+        hyde_visible = method in ("embedding", "hybrid")
+
+        self.enable_hyde_cb.setVisible(hyde_visible)
+
+        if hasattr(self, "enable_hyde_row"):
+
+            self.enable_hyde_row.setVisible(hyde_visible)
 
 
 
@@ -8631,11 +8736,17 @@ class SettingsDialog(QDialog):
 
 
 
-        self.hybrid_weight_label.setVisible(method == "hybrid")
+        hybrid_visible = method == "hybrid"
+
+        self.hybrid_weight_label.setVisible(hybrid_visible)
 
 
 
-        self.hybrid_weight_spin.setVisible(method == "hybrid")
+        self.hybrid_weight_spin.setVisible(hybrid_visible)
+
+        if hasattr(self, "hybrid_weight_row"):
+
+            self.hybrid_weight_row.setVisible(hybrid_visible)
 
 
 
@@ -8792,14 +8903,15 @@ class SettingsDialog(QDialog):
             if hasattr(self, 'embedding_status_label'):
 
                 self.embedding_status_label.setText(status_text)
+                theme = _addon_theme()
 
                 if "READY" in status_text or "CONNECTED" in status_text:
 
-                    self.embedding_status_label.setStyleSheet("padding: 10px; border: 1px solid #2ecc71; border-radius: 4px; background: #1a2a1a; color: #2ecc71;")
+                    self.embedding_status_label.setStyleSheet(settings_status_label_style(theme, "success"))
 
                 else:
 
-                    self.embedding_status_label.setStyleSheet("padding: 10px; border: 1px solid #e74c3c; border-radius: 4px; background: #2a1a1a; color: #e74c3c;")
+                    self.embedding_status_label.setStyleSheet(settings_status_label_style(theme, "error"))
 
         except Exception as e:
 

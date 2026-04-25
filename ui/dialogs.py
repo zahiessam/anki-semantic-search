@@ -67,7 +67,7 @@ from ..utils import (
     save_search_history,
     clear_search_history,
 )
-from ..utils.text import unescape_string, clean_html, reveal_cloze, semantic_chunk_text
+from ..utils.text import unescape_string, clean_html, clean_html_for_display, reveal_cloze, semantic_chunk_text
 from ..utils.config import VOYAGE_EMBEDDING_MODELS
 from ..core.engine import (
     get_ollama_models,
@@ -205,9 +205,16 @@ def get_notes_content_with_col(col, config):
         if not content_parts:
             continue
 
-        content = clean_html(" | ".join(content_parts)).strip()
+        raw_content = " | ".join(content_parts)
+        content = clean_html(raw_content).strip()
         if not content:
             continue
+        display_parts = []
+        for part in content_parts:
+            display_part = clean_html_for_display(part).strip()
+            if display_part:
+                display_parts.append(display_part)
+        display_content = " | ".join(display_parts) or content
 
         chunks = _semantic_chunk_text(content, chunk_target)
         if len(chunks) <= 1:
@@ -217,7 +224,7 @@ def get_notes_content_with_col(col, config):
                 'content': content,
                 'content_hash': content_hash,
                 'model': model_name,
-                'display_content': content,
+                'display_content': display_content,
             })
             continue
 
@@ -228,9 +235,10 @@ def get_notes_content_with_col(col, config):
                 'content': chunk,
                 'content_hash': chunk_hash,
                 'model': model_name,
-                'display_content': chunk,
+                'display_content': clean_html_for_display(chunk).strip() or chunk,
                 'chunk_index': chunk_idx,
                 '_full_content': content,
+                '_full_display_content': display_content,
             })
 
     return notes_data, fields_description, cache_key
@@ -763,9 +771,29 @@ class AISearchDialog(QDialog):
 
 
 
-    def _passes_focused_balanced_broad(self, final_score, emb_score, matched_keywords, keywords, search_method, max_emb_score):
+    def _passes_focused_balanced_broad(
+        self,
+        matched_keywords,
+        final_score,
+        emb_score,
+        max_emb_score,
+        keywords,
+        search_method,
+        embeddings_available,
+        min_emb_frac=0.25,
+        very_high_emb_frac=0.9,
+    ):
         return query_enhancement._passes_focused_balanced_broad(
-            self, final_score, emb_score, matched_keywords, keywords, search_method, max_emb_score
+            self,
+            matched_keywords,
+            final_score,
+            emb_score,
+            max_emb_score,
+            keywords,
+            search_method,
+            embeddings_available,
+            min_emb_frac,
+            very_high_emb_frac,
         )
 
 

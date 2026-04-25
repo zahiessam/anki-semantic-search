@@ -8143,7 +8143,12 @@ Rules:
 
 
 
-            raw_for_display = note.get('_full_content') or note.get('display_content') or note['content']
+            raw_for_display = (
+                note.get('_full_display_content')
+                or note.get('display_content')
+                or note.get('_full_content')
+                or note['content']
+            )
 
 
 

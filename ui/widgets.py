@@ -2,7 +2,12 @@ import os
 import sys
 import re
 from aqt.qt import *
-from .theme import get_addon_theme
+from .theme import (
+    collapsible_section_button_stylesheet,
+    collapsible_section_content_stylesheet,
+    get_addon_theme,
+    settings_field_row_stylesheet,
+)
 from ..utils import log_debug, load_config
 
 def _get_spell_checker():
@@ -38,7 +43,7 @@ class SpellCheckHighlighter(QSyntaxHighlighter):
         super().__init__(parent)
         self._spell = _get_spell_checker()
         self._format = QTextCharFormat()
-        self._format.setUnderlineColor(QColor("#e74c3c"))
+        self._format.setUnderlineColor(QColor(get_addon_theme()["danger"]))
         ustyle = getattr(QTextCharFormat.UnderlineStyle, 'SpellCheckUnderline', None) or getattr(QTextCharFormat, 'SpellCheckUnderline', None)
         self._format.setUnderlineStyle(ustyle if ustyle is not None else QTextCharFormat.UnderlineStyle.SingleUnderline)
         self._custom_words = set()
@@ -90,6 +95,31 @@ class SpellCheckPlainTextEdit(QPlainTextEdit):
         cursor.insertText(new_word)
         cursor.endEditBlock()
 
+
+def settings_field_row(theme, content=None, label=None, layout=None, vertical=False):
+    row = QFrame()
+    row.setObjectName("settingsFieldRow")
+    row.setStyleSheet(settings_field_row_stylesheet(theme))
+
+    row_layout = QVBoxLayout(row) if vertical else QHBoxLayout(row)
+    row_layout.setContentsMargins(8, 6, 8, 6)
+    row_layout.setSpacing(8)
+
+    if label:
+        label_widget = label if isinstance(label, QLabel) else QLabel(str(label))
+        label_widget.setStyleSheet(f"color: {theme['text']}; border: none; background: transparent;")
+        if not vertical:
+            label_widget.setMinimumWidth(170)
+        row_layout.addWidget(label_widget)
+
+    if layout is not None:
+        row_layout.addLayout(layout)
+    elif content is not None:
+        row_layout.addWidget(content)
+
+    return row
+
+
 class CollapsibleSection(QWidget):
     def __init__(self, title="", parent=None, is_expanded=False):
         super().__init__(parent)
@@ -103,25 +133,7 @@ class CollapsibleSection(QWidget):
         self.toggle_button = QPushButton(title)
         self.toggle_button.setCheckable(True)
         self.toggle_button.setChecked(self.is_expanded)
-        self.toggle_button.setStyleSheet(f"""
-            QPushButton {{
-                text-align: left;
-                font-weight: bold;
-                font-size: 14px;
-                padding: 10px 15px;
-                background-color: {theme['header_bg']};
-                color: {theme['text']};
-                border: 1px solid {theme['panel_border']};
-                border-radius: 4px;
-                margin-top: 5px;
-            }}
-            QPushButton:hover {{ background-color: {theme['panel_bg']}; }}
-            QPushButton:checked {{
-                border-bottom-left-radius: 0px;
-                border-bottom-right-radius: 0px;
-                background-color: {theme['bg']};
-            }}
-        """)
+        self.toggle_button.setStyleSheet(collapsible_section_button_stylesheet(theme))
 
         self._update_arrow()
         self.toggle_button.clicked.connect(self.toggle)
@@ -129,16 +141,9 @@ class CollapsibleSection(QWidget):
 
         self.content_area = QWidget()
         self.content_layout = QVBoxLayout(self.content_area)
-        self.content_layout.setContentsMargins(15, 15, 15, 15)
-        self.content_area.setStyleSheet(f"""
-            QWidget {{
-                background-color: {theme['panel_bg']};
-                border: 1px solid {theme['panel_border']};
-                border-top: none;
-                border-bottom-left-radius: 4px;
-                border-bottom-right-radius: 4px;
-            }}
-        """)
+        self.content_layout.setContentsMargins(16, 14, 16, 16)
+        self.content_layout.setSpacing(8)
+        self.content_area.setStyleSheet(collapsible_section_content_stylesheet(theme))
         self.content_area.setVisible(self.is_expanded)
         self.main_layout.addWidget(self.content_area)
 

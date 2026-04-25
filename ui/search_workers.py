@@ -573,7 +573,7 @@ def _do_rerank(query, scored_notes, top_k, search_config):
 
 
 
-            addon_dir = os.path.dirname(os.path.abspath(__file__))
+            addon_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 
@@ -795,8 +795,6 @@ def _do_rerank(query, scored_notes, top_k, search_config):
 
                     return scored_notes, False
 
-
-
                 except Exception as e:
 
 
@@ -806,6 +804,12 @@ def _do_rerank(query, scored_notes, top_k, search_config):
 
 
                     return scored_notes, False
+
+            else:
+
+
+
+                log_debug(f"Rerank helper not found at expected path: {helper_path}")
 
 
 

@@ -863,7 +863,7 @@ def get_pytorch_dll_error_guidance():
 
 
 
-        "   - Then reinstall using 'Install Dependencies' in settings\n\n"
+        "   - Then reinstall using 'Install / show command for external Python' in settings\n\n"
 
 
 
@@ -1399,7 +1399,7 @@ def try_alternative_pytorch_install():
 
 
 
-                    showInfo(f"PyTorch {torch.__version__} installed successfully!\n\nNow click 'Install Dependencies' to install sentence-transformers.")
+                    showInfo(f"PyTorch {torch.__version__} installed successfully!\n\nNow use 'Install / show command for external Python' to install sentence-transformers.")
 
 
 
@@ -2289,7 +2289,7 @@ def install_dependencies(python_exe=None):
 
 
 
-        target_label = "Python for Cross-Encoder (from Settings)"
+        target_label = "External Python for Cross-Encoder"
 
 
 
@@ -2389,7 +2389,7 @@ def install_dependencies(python_exe=None):
 
 
 
-        f"Where to run: Use the Python above, or the one set as 'Python for Cross-Encoder' in Settings.\n\n"
+        f"Where to run: Use the Python above, or the one set under 'Use external Python' in Settings.\n\n"
 
 
 

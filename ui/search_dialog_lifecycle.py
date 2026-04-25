@@ -172,7 +172,7 @@ def initialize_search_dialog(dialog, parent=None):
 
 
 
-        QPushButton {{ padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 12px; color: white; }}
+        QPushButton {{ padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 12px; color: {theme['button_text']}; }}
 
 
 
@@ -192,7 +192,7 @@ def initialize_search_dialog(dialog, parent=None):
 
 
 
-        QPushButton#viewBtn {{ background-color: {theme['success']}; border: 2px solid #1e8449; color: white; }}
+        QPushButton#viewBtn {{ background-color: {theme['success']}; border: 2px solid {theme['success_border']}; color: {theme['button_text']}; }}
 
 
 
@@ -204,11 +204,11 @@ def initialize_search_dialog(dialog, parent=None):
 
 
 
-        QPushButton#viewAllBtn {{ background-color: #16a085; border: 2px solid #117a65; color: white; }}
+        QPushButton#viewAllBtn {{ background-color: {theme['teal']}; border: 2px solid {theme['teal_border']}; color: {theme['button_text']}; }}
 
 
 
-        QPushButton#viewAllBtn:hover {{ background-color: #1abc9c; border-color: #16a085; }}
+        QPushButton#viewAllBtn:hover {{ background-color: {theme['teal_hover']}; border-color: {theme['teal']}; }}
 
 
 
@@ -216,15 +216,15 @@ def initialize_search_dialog(dialog, parent=None):
 
 
 
-        QPushButton#closeBtn {{ background-color: #c0392b; border: 2px solid #922b21; color: white; }}
+        QPushButton#closeBtn {{ background-color: {theme['danger']}; border: 2px solid {theme['danger_border']}; color: {theme['button_text']}; }}
 
 
 
-        QPushButton#closeBtn:hover {{ background-color: #e74c3c; border-color: #c0392b; }}
+        QPushButton#closeBtn:hover {{ background-color: {theme['danger_hover']}; border-color: {theme['danger']}; }}
 
 
 
-        QPushButton#toggleSelectBtn {{ background-color: {theme['accent']}; border: 2px solid #2980b9; color: white; padding: 4px 8px; font-size: 11px; }}
+        QPushButton#toggleSelectBtn {{ background-color: {theme['accent']}; border: 2px solid {theme['accent_border']}; color: {theme['button_text']}; padding: 4px 8px; font-size: 11px; }}
 
 
 
@@ -276,7 +276,7 @@ def initialize_search_dialog(dialog, parent=None):
 
 
 
-        QTableWidget::item:selected {{ background-color: {theme['accent']}; color: white; }}
+        QTableWidget::item:selected {{ background-color: {theme['accent']}; color: {theme['selected_text']}; }}
 
 
 

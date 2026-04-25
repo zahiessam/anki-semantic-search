@@ -1,7 +1,17 @@
+import html
 import re
 
 # Compiled regex patterns for performance and consistency
 HTML_TAG_RE = re.compile(r'<.*?>', re.DOTALL)
+DISPLAY_BLOCK_TAG_RE = re.compile(
+    r'</?(?:div|p|li|ul|ol|tr|table|tbody|thead|tfoot|section|article|h[1-6])\b[^>]*>',
+    re.IGNORECASE,
+)
+DISPLAY_BREAK_TAG_RE = re.compile(r'<br\s*/?>', re.IGNORECASE)
+DISPLAY_CELL_TAG_RE = re.compile(r'</?(?:td|th)\b[^>]*>', re.IGNORECASE)
+DISPLAY_SEPARATOR_RE = re.compile(r'\s*(?:\|\s*){1,}')
+DISPLAY_SPACE_RE = re.compile(r'[ \t\r\f\v]+')
+DISPLAY_NEWLINE_RE = re.compile(r'\s*\n+\s*')
 CLOZE_RE = re.compile(r'\{\{c\d+::(.*?)(?=\}\}|::)(?:::[^}]*)?\}\}')
 SENTENCE_BOUNDARY_RE = re.compile(r'(?<=[.!?\n])\s+|\n+')
 CITATION_RE = re.compile(r'\[([\d,\s]+)\]')
@@ -29,6 +39,21 @@ def clean_html(text):
     if not text:
         return ""
     return HTML_TAG_RE.sub('', text)
+
+def clean_html_for_display(text):
+    """Strip HTML while preserving readable display boundaries."""
+    if not text:
+        return ""
+    cleaned = html.unescape(str(text))
+    cleaned = DISPLAY_BREAK_TAG_RE.sub(" ", cleaned)
+    cleaned = DISPLAY_CELL_TAG_RE.sub(" ", cleaned)
+    cleaned = DISPLAY_BLOCK_TAG_RE.sub(" ", cleaned)
+    cleaned = HTML_TAG_RE.sub("", cleaned)
+    cleaned = DISPLAY_SEPARATOR_RE.sub(" | ", cleaned)
+    cleaned = DISPLAY_SPACE_RE.sub(" ", cleaned)
+    cleaned = DISPLAY_NEWLINE_RE.sub(" | ", cleaned)
+    cleaned = DISPLAY_SEPARATOR_RE.sub(" | ", cleaned)
+    return cleaned.strip(" |")
 
 def reveal_cloze(text):
     """Reveal cloze deletions for display: {{cN::answer}} -> answer."""
