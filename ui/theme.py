@@ -19,6 +19,33 @@ def _rgba(color, alpha):
     return f"rgba({color.red()}, {color.green()}, {color.blue()}, {alpha})"
 
 
+def _linear_channel(value):
+    value = value / 255.0
+    return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+
+
+def _relative_luminance(color):
+    return (
+        0.2126 * _linear_channel(color.red())
+        + 0.7152 * _linear_channel(color.green())
+        + 0.0722 * _linear_channel(color.blue())
+    )
+
+
+def _contrast_ratio(a, b):
+    a_lum = _relative_luminance(a)
+    b_lum = _relative_luminance(b)
+    lighter = max(a_lum, b_lum)
+    darker = min(a_lum, b_lum)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def _readable_text_for(bg):
+    white = QColor("#ffffff")
+    black = QColor("#000000")
+    return white if _contrast_ratio(bg, white) >= _contrast_ratio(bg, black) else black
+
+
 def get_addon_theme(is_dark=None):
     """Shared Anki-aware visual tokens for Settings/Search dialogs and sidebar."""
     palette = QApplication.palette()
@@ -36,6 +63,7 @@ def get_addon_theme(is_dark=None):
     black = QColor("#000000")
     accent = highlight if highlight.isValid() else QColor("#3498db")
     accent_hover = _blend(accent, white if is_dark else black, 0.18)
+    accent_text = _readable_text_for(accent)
 
     if is_dark:
         app_bg = _blend(window, black, 0.10)
@@ -67,6 +95,9 @@ def get_addon_theme(is_dark=None):
     quiet_text = _blend(text, app_bg, 0.42 if is_dark else 0.52)
     muted_btn = _blend(app_bg if is_dark else button, white if is_dark else black, 0.16)
     muted_btn_hover = _blend(muted_btn, white if is_dark else black, 0.14)
+    tab_bg = section_header_bg
+    tab_hover_bg = panel_bg
+    tab_selected_bg = accent
 
     success = QColor("#2ecc71" if is_dark else "#27ae60")
     warn = QColor("#f39c12" if is_dark else "#d35400")
@@ -89,26 +120,38 @@ def get_addon_theme(is_dark=None):
         "accent": _hex(accent),
         "accent_hover": _hex(accent_hover),
         "accent_border": _hex(_blend(accent, black, 0.18)),
+        "accent_text": _hex(accent_text),
         "focus_border": _hex(accent),
-        "button_text": "#ffffff",
-        "selected_text": _hex(palette.color(QPalette.ColorRole.HighlightedText)),
+        "button_text": _hex(_readable_text_for(muted_btn)),
+        "selected_text": _hex(accent_text),
         "success": _hex(success),
+        "success_text": _hex(_readable_text_for(success)),
         "success_hover": _hex(_blend(success, white if is_dark else black, 0.12)),
         "success_border": _hex(_blend(success, black, 0.24)),
         "warning": _hex(warn),
+        "warning_text": _hex(_readable_text_for(warn)),
         "warning_hover": _hex(_blend(warn, white if is_dark else black, 0.12)),
         "danger": _hex(danger),
+        "danger_text": _hex(_readable_text_for(danger)),
         "danger_hover": _hex(_blend(danger, white if is_dark else black, 0.12)),
         "danger_border": _hex(_blend(danger, black, 0.24)),
         "teal": _hex(teal),
+        "teal_text": _hex(_readable_text_for(teal)),
         "teal_hover": _hex(_blend(teal, white if is_dark else black, 0.12)),
         "teal_border": _hex(_blend(teal, black, 0.24)),
         "muted_btn": _hex(muted_btn),
+        "muted_btn_text": _hex(_readable_text_for(muted_btn)),
         "muted_btn_hover": _hex(muted_btn_hover),
         "panel_bg": _hex(panel_bg),
         "section_bg": _hex(section_bg),
         "section_header_bg": _hex(section_header_bg),
         "section_header_checked": _hex(section_header_checked),
+        "tab_bg": _hex(tab_bg),
+        "tab_text": _hex(_readable_text_for(tab_bg)),
+        "tab_hover_bg": _hex(tab_hover_bg),
+        "tab_hover_text": _hex(_readable_text_for(tab_hover_bg)),
+        "tab_selected_bg": _hex(tab_selected_bg),
+        "tab_selected_text": _hex(_readable_text_for(tab_selected_bg)),
         "panel_border": _hex(panel_border),
         "subtle_border": _hex(subtle_border),
         "control_border": _hex(control_border),
@@ -260,18 +303,23 @@ def settings_dialog_stylesheet(theme):
         }}
         QTabWidget::pane {{ border: 1px solid {theme['subtle_border']}; background-color: {theme['bg']}; }}
         QTabBar::tab {{
-            background-color: {theme['section_header_bg']};
-            color: {theme['text']};
+            background-color: {theme['tab_bg']};
+            color: {theme['tab_text']};
             padding: 9px 18px;
             border: 1px solid {theme['subtle_border']};
             border-top-left-radius: 4px;
             border-top-right-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
         }}
-        QTabBar::tab:hover {{ background-color: {theme['panel_bg']}; }}
+        QTabBar::tab:hover {{
+            background-color: {theme['tab_hover_bg']};
+            color: {theme['tab_hover_text']};
+        }}
         QTabBar::tab:selected {{
-            background-color: {theme['accent']};
-            color: {theme['selected_text']};
-            border-color: {theme['accent']};
+            background-color: {theme['tab_selected_bg']};
+            color: {theme['tab_selected_text']};
+            border-color: {theme['tab_selected_bg']};
         }}
         QCheckBox {{
             spacing: 8px;
@@ -389,17 +437,17 @@ def collapsible_section_content_stylesheet(theme):
 
 def settings_button_style(theme, variant="muted"):
     variants = {
-        "primary": ("accent", "accent_hover", "accent_border"),
-        "accent": ("accent", "accent_hover", "accent_border"),
-        "muted": ("muted_btn", "muted_btn_hover", "control_border"),
-        "success": ("success", "success_hover", "success_border"),
-        "warning": ("warning", "warning_hover", "control_border"),
-        "danger": ("danger", "danger_hover", "danger_border"),
+        "primary": ("accent", "accent_hover", "accent_border", "accent_text"),
+        "accent": ("accent", "accent_hover", "accent_border", "accent_text"),
+        "muted": ("muted_btn", "muted_btn_hover", "control_border", "muted_btn_text"),
+        "success": ("success", "success_hover", "success_border", "success_text"),
+        "warning": ("warning", "warning_hover", "control_border", "warning_text"),
+        "danger": ("danger", "danger_hover", "danger_border", "danger_text"),
     }
-    bg_key, hover_key, border_key = variants.get(variant, variants["muted"])
+    bg_key, hover_key, border_key, text_key = variants.get(variant, variants["muted"])
     return (
         "QPushButton { "
-        f"background-color: {theme[bg_key]}; color: {theme['button_text']}; "
+        f"background-color: {theme[bg_key]}; color: {theme[text_key]}; "
         f"padding: 8px; font-weight: bold; border: 1px solid {theme[border_key]}; "
         "} "
         f"QPushButton:hover {{ background-color: {theme[hover_key]}; }}"

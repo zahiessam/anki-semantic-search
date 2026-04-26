@@ -8255,7 +8255,6 @@ Rules:
 
 
 
-            preview_len = getattr(self, 'preview_length', 150)
 
 
 
@@ -8276,11 +8275,7 @@ Rules:
 
 
 
-            content_preview = display_content[:preview_len] + "..." if len(display_content) > preview_len else display_content
-
-
-
-            content_item = QTableWidgetItem(content_preview)
+            content_item = QTableWidgetItem(display_content)
 
 
 
@@ -8304,43 +8299,14 @@ Rules:
 
 
 
-            import html
-
-            formatted_content = html.escape(display_content).replace(" | ", "<br><hr style='border: 0; border-top: 1px solid #555;'><br>")
-
-
-
-            why_html = f"<b>Why this result?</b><br>Relevance: {display_pct}%<br>{why_ref}"
-
-            if matching_terms:
-
-                why_html += f"<br>Matching terms: {', '.join(matching_terms[:8])}{'...' if len(matching_terms) > 8 else ''}"
-
-
-
-            tooltip_html = f"""
-
-            <div style='font-family: sans-serif; min-width: 300px;'>
-
-                {why_html}
-
-                <br><br>
-
-                <b>Note ID:</b> {note['id']}
-
-                <br><br>
-
-                <b>Full Content:</b><br>
-
-                {formatted_content}
-
-            </div>
-
-            """
-
-
-
-            content_item.setToolTip(tooltip_html.strip())
+            content_item.setToolTip("")
+            content_item.setData(Qt.ItemDataRole.UserRole + 3, {
+                "id": note['id'],
+                "display_content": display_content,
+                "relevance": display_pct,
+                "why_ref": why_ref,
+                "matching_terms": matching_terms,
+            })
 
 
 
@@ -8926,35 +8892,27 @@ Rules:
 
 
 
-    def on_preview_length_changed(self, value):
 
 
 
-        """Update preview length and refresh display"""
 
 
 
-        self.preview_length = value
 
 
 
-        if hasattr(self, 'preview_length_label'):
 
 
 
-            self.preview_length_label.setText(f"{value} chars")
 
 
 
-        # Refresh the display if we have notes
 
 
 
-        if hasattr(self, 'all_scored_notes') and self.all_scored_notes:
 
 
 
-            self.filter_and_display_notes()
 
 
 
@@ -9461,6 +9419,25 @@ Rules:
             tooltip("\u2713 Note opened in browser")
 
 
+    def _show_note_preview_for_cell(self, row, column):
+        if column != 1 or not hasattr(self, '_note_preview_popup'):
+            if hasattr(self, '_note_preview_popup'):
+                self._note_preview_popup.hide()
+            return
+
+        item = self.results_list.item(row, column)
+        if not item:
+            self._note_preview_popup.hide()
+            return
+
+        note_info = item.data(Qt.ItemDataRole.UserRole + 3)
+        if not isinstance(note_info, dict):
+            self._note_preview_popup.hide()
+            return
+
+        self._note_preview_popup.show_note(note_info)
+
+
 # ============================================================================
 # Dynamic Method Compatibility Wiring
 # ============================================================================
@@ -9476,8 +9453,9 @@ _AISEARCH_METHODS_FROM_WORKER = (
     'ask_ai', 'call_ollama', 'call_anthropic', 'call_openai', 'call_google', 'call_openrouter',
     'call_custom', '_openai_compatible_chat_url', 'make_request', 'parse_response', '_rerank_by_relevance_to_answer', 'filter_and_display_notes', '_get_matching_terms_for_note', 'update_selection_count',
     '_start_anthropic_stream', '_append_stream_chunk', '_on_anthropic_stream_done', '_on_anthropic_stream_error',
-    'on_preview_length_changed', 'toggle_select_all', 'select_all_notes', 'deselect_all_notes',
+    'toggle_select_all', 'select_all_notes', 'deselect_all_notes',
     'restore_selections', '_bring_browser_to_front', 'open_selected_in_browser', 'open_all_in_browser', 'open_in_browser',
+    '_show_note_preview_for_cell',
 )
 
 

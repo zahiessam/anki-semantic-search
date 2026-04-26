@@ -65,6 +65,20 @@ from ..utils import (
 
 _addon_theme = get_addon_theme
 
+ANSWER_CLOUD_PROVIDERS = [
+    ("Anthropic (Claude)", "anthropic", "sk-ant-..."),
+    ("OpenAI (GPT)", "openai", "sk-..."),
+    ("Google (Gemini)", "google", "AI..."),
+    ("OpenRouter", "openrouter", "sk-or-..."),
+    ("Custom / OpenAI-compatible", "custom", "custom key"),
+]
+
+EMBEDDING_CLOUD_PROVIDERS = [
+    ("Voyage AI (Recommended)", "Voyage AI", "pa-..."),
+    ("OpenAI", "OpenAI", "sk-..."),
+    ("Cohere", "Cohere", "co-..."),
+]
+
 
 class SettingsDialog(QDialog):
 
@@ -541,7 +555,7 @@ class SettingsDialog(QDialog):
 
         subtitle = QLabel(
 
-            "Choose a Local Server (no key required) or a Cloud API key. Provider is detected automatically from the key. "
+            "Choose a Local Server (no key required) or a Cloud API provider and key. "
 
             "Works with OpenAI, Anthropic, Google, OpenRouter, or custom OpenAI-compatible endpoints."
 
@@ -659,83 +673,18 @@ class SettingsDialog(QDialog):
 
 
 
-        key_layout = QHBoxLayout()
-
-
-
-        key_label = QLabel("API Key:")
-
-
-
-        self.api_key_input = QLineEdit()
-
-
-
-        self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-
-
-
-        self.api_key_input.setPlaceholderText("Paste your API key here...")
-
-
-
-        self.api_key_input.textChanged.connect(self.detect_provider)
-
-
-
-
-
-
-
-        key_layout.addWidget(key_label)
-
-
-
-        key_layout.addWidget(self.api_key_input)
-
-
-
-
-
-
-
-        self.show_key_btn = QPushButton("Show")
-
-
-
-        self.show_key_btn.setMaximumWidth(80)
-
-
-
-        self.show_key_btn.clicked.connect(self.toggle_key_visibility)
-
-
-
-        key_layout.addWidget(self.show_key_btn)
-
-
-
-        api_key_section_layout.addWidget(settings_field_row(theme, layout=key_layout))
-
-
-
-
-
-
-
-        self.provider_label = QLabel()
-
-
-
-        self.provider_label.setStyleSheet(settings_text_style(theme, "summary"))
-
-
-
-        self.provider_label.hide()
-
-
-
-        api_key_section_layout.addWidget(self.provider_label)
+        answer_cloud_section = self._build_cloud_provider_section(
+            theme=theme,
+            providers=ANSWER_CLOUD_PROVIDERS,
+            provider_attr="answer_cloud_provider_combo",
+            key_attr="api_key_input",
+            show_button_attr="show_key_btn",
+            detected_label_attr="provider_label",
+            key_placeholder="Paste your answer API key here...",
+            show_callback=self.toggle_key_visibility,
+            changed_callback=self.detect_provider,
+        )
+        api_key_section_layout.addWidget(answer_cloud_section)
 
 
 
@@ -824,16 +773,6 @@ class SettingsDialog(QDialog):
         self.local_server_autodetect_btn.clicked.connect(self._autodetect_local_server)
 
         model_row.addWidget(self.local_server_autodetect_btn)
-
-
-
-        self.ollama_chat_refresh_btn = QPushButton("\U0001F504 Refresh")
-
-        self.ollama_chat_refresh_btn.setToolTip("Try to fetch models from the local server.")
-
-        self.ollama_chat_refresh_btn.clicked.connect(self._refresh_local_models)
-
-        model_row.addWidget(self.ollama_chat_refresh_btn)
 
 
 
@@ -962,51 +901,17 @@ class SettingsDialog(QDialog):
 
 
 
-        self.embedding_cloud_section = QWidget()
-
-        embedding_cloud_layout = QVBoxLayout(self.embedding_cloud_section)
-
-        embedding_cloud_layout.setContentsMargins(0, 0, 0, 0)
-
-        self.embedding_cloud_provider_combo = QComboBox()
-
-        self.embedding_cloud_provider_combo.addItem("Voyage AI (Recommended)", "Voyage AI")
-
-        self.embedding_cloud_provider_combo.addItem("OpenAI", "OpenAI")
-
-        self.embedding_cloud_provider_combo.addItem("Cohere", "Cohere")
-
-        embedding_cloud_layout.addWidget(settings_field_row(theme, self.embedding_cloud_provider_combo, "Cloud Provider:"))
-
-
-
-        embedding_key_row = QHBoxLayout()
-
-        self.embedding_cloud_api_key_input = QLineEdit()
-
-        self.embedding_cloud_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-
-        self.embedding_cloud_api_key_input.setPlaceholderText("Paste your embedding API key here...")
-
-        embedding_key_row.addWidget(self.embedding_cloud_api_key_input)
-
-        self.embedding_cloud_show_key_btn = QPushButton("Show")
-
-        self.embedding_cloud_show_key_btn.setMaximumWidth(80)
-
-        self.embedding_cloud_show_key_btn.clicked.connect(self._toggle_embedding_cloud_key_visibility)
-
-        embedding_key_row.addWidget(self.embedding_cloud_show_key_btn)
-
-        embedding_cloud_layout.addWidget(settings_field_row(theme, layout=embedding_key_row))
-
-
-
-        self.embedding_cloud_detected_label = QLabel()
-
-        self.embedding_cloud_detected_label.setStyleSheet(settings_text_style(theme, "summary"))
-
-        embedding_cloud_layout.addWidget(settings_field_row(theme, self.embedding_cloud_detected_label))
+        self.embedding_cloud_section = self._build_cloud_provider_section(
+            theme=theme,
+            providers=EMBEDDING_CLOUD_PROVIDERS,
+            provider_attr="embedding_cloud_provider_combo",
+            key_attr="embedding_cloud_api_key_input",
+            show_button_attr="embedding_cloud_show_key_btn",
+            detected_label_attr="embedding_cloud_detected_label",
+            key_placeholder="Paste your embedding API key here...",
+            show_callback=self._toggle_embedding_cloud_key_visibility,
+            changed_callback=self._on_embedding_cloud_provider_changed,
+        )
 
         embedding_independent_layout.addWidget(self.embedding_cloud_section)
 
@@ -3215,15 +3120,24 @@ class SettingsDialog(QDialog):
 
 
 
-        # Answer provider: API key vs Ollama vs Local OpenAI
+        # Answer provider: local server vs cloud, then the specific cloud provider.
 
         provider = config.get('provider', 'ollama')
 
-        idx = self.answer_provider_combo.findData(provider)
+        answer_mode = "local_server" if provider in ["ollama", "local_openai", "local_server"] else "api_key"
 
-        if idx >= 0:
+        self._select_combo_data(self.answer_provider_combo, answer_mode)
 
-            self.answer_provider_combo.setCurrentIndex(idx)
+        cloud_provider_id = config.get('answer_cloud_provider') or provider
+
+        self._select_combo_data(self.answer_cloud_provider_combo, {
+            "anthropic": "anthropic",
+            "openai": "openai",
+            "google": "google",
+            "gemini": "google",
+            "openrouter": "openrouter",
+            "custom": "custom",
+        }.get(cloud_provider_id, "openai"))
 
 
 
@@ -6934,118 +6848,99 @@ class SettingsDialog(QDialog):
 
     # --- Answer And Embedding Provider Settings ---
 
+    def _build_cloud_provider_section(
+        self,
+        theme,
+        providers,
+        provider_attr,
+        key_attr,
+        show_button_attr,
+        detected_label_attr,
+        key_placeholder,
+        show_callback,
+        changed_callback,
+    ):
+        section = QWidget()
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        provider_combo = QComboBox()
+        for label, provider_id, _prefix in providers:
+            provider_combo.addItem(label, provider_id)
+        provider_combo.currentIndexChanged.connect(changed_callback)
+        setattr(self, provider_attr, provider_combo)
+        layout.addWidget(settings_field_row(theme, provider_combo, "Cloud Provider:"))
+
+        key_row = QHBoxLayout()
+        key_input = QLineEdit()
+        key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        key_input.setPlaceholderText(key_placeholder)
+        key_input.textChanged.connect(changed_callback)
+        setattr(self, key_attr, key_input)
+        key_row.addWidget(key_input)
+
+        show_button = QPushButton("Show")
+        show_button.setMaximumWidth(80)
+        show_button.clicked.connect(show_callback)
+        setattr(self, show_button_attr, show_button)
+        key_row.addWidget(show_button)
+        layout.addWidget(settings_field_row(theme, layout=key_row, label="API Key:"))
+
+        detected_label = QLabel()
+        detected_label.setStyleSheet(settings_text_style(theme, "summary"))
+        detected_label.hide()
+        setattr(self, detected_label_attr, detected_label)
+        layout.addWidget(settings_field_row(theme, detected_label))
+
+        return section
+
+    def _selected_provider_label(self, combo):
+        index = combo.currentIndex()
+        return combo.itemText(index) if index >= 0 else ""
+
+    def _selected_provider_key_hint(self, combo, providers):
+        provider_id = combo.currentData()
+        for _label, candidate_id, prefix in providers:
+            if candidate_id == provider_id:
+                return prefix
+        return ""
+
+    def _select_combo_data(self, combo, value):
+        idx = combo.findData(value)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+
+    def _toggle_password_visibility(self, input_attr, button_attr):
+        key_input = getattr(self, input_attr, None)
+        show_button = getattr(self, button_attr, None)
+        if not key_input or not show_button:
+            return
+        if key_input.echoMode() == QLineEdit.EchoMode.Password:
+            key_input.setEchoMode(QLineEdit.EchoMode.Normal)
+            show_button.setText("Hide")
+        else:
+            key_input.setEchoMode(QLineEdit.EchoMode.Password)
+            show_button.setText("Show")
+
     def detect_provider(self):
-
-
-
         api_key = self.api_key_input.text().strip()
+        provider_id = self.answer_cloud_provider_combo.currentData() or "openai"
+        provider = self._selected_provider_label(self.answer_cloud_provider_combo) or "OpenAI (GPT)"
+        is_custom = provider_id == "custom"
+        key_hint = self._selected_provider_key_hint(self.answer_cloud_provider_combo, ANSWER_CLOUD_PROVIDERS)
+        self.api_key_input.setPlaceholderText(f"Paste your answer API key here ({key_hint})")
 
-
+        if hasattr(self, "url_row"):
+            self.url_row.setVisible(is_custom)
+        if hasattr(self, "url_widget"):
+            self.url_widget.setVisible(is_custom)
 
         if not api_key:
-
-
-
-            self.provider_label.hide()
-
-
-
-            self.url_widget.hide()
-            if hasattr(self, "url_row"):
-                self.url_row.hide()
-
-
-
-            return ""
-
-
-
-
-
-
-
-        if api_key.startswith("sk-ant-"):
-
-
-
-            provider = "Anthropic (Claude)"
-
-
-
-            self.url_widget.hide()
-            if hasattr(self, "url_row"):
-                self.url_row.hide()
-
-
-
-        elif api_key.startswith("sk-or-"):
-
-
-
-            provider = "OpenRouter"
-
-
-
-            self.url_widget.hide()
-            if hasattr(self, "url_row"):
-                self.url_row.hide()
-
-
-
-        elif api_key.startswith("sk-"):
-
-
-
-            provider = "OpenAI (GPT)"
-
-
-
-            self.url_widget.hide()
-            if hasattr(self, "url_row"):
-                self.url_row.hide()
-
-
-
-        elif api_key.startswith("AI"):
-
-
-
-            provider = "Google (Gemini)"
-
-
-
-            self.url_widget.hide()
-            if hasattr(self, "url_row"):
-                self.url_row.hide()
-
-
-
+            self.provider_label.setText(f"Selected: {provider}")
         else:
-
-
-
-            provider = "Custom/Unknown Provider"
-
-
-
-            if hasattr(self, "url_row"):
-                self.url_row.show()
-            self.url_widget.show()
-
-
-
-
-
-
-
-        self.provider_label.setText(f"\u2713 Detected: {provider}")
-
-
-
+            self.provider_label.setText(f"\u2713 Selected: {provider}")
         self.provider_label.show()
-
-
-
         return provider
 
 
@@ -7055,30 +6950,7 @@ class SettingsDialog(QDialog):
 
 
     def toggle_key_visibility(self):
-
-
-
-        if self.api_key_input.echoMode() == QLineEdit.EchoMode.Password:
-
-
-
-            self.api_key_input.setEchoMode(QLineEdit.EchoMode.Normal)
-
-
-
-            self.show_key_btn.setText("Hide")
-
-
-
-        else:
-
-
-
-            self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-
-
-
-            self.show_key_btn.setText("Show")
+        self._toggle_password_visibility("api_key_input", "show_key_btn")
 
 
 
@@ -7089,10 +6961,10 @@ class SettingsDialog(QDialog):
     # explanation: wires all interactive signals for the embedding section.
     def _connect_embedding_signals(self):
         self.answer_provider_combo.currentIndexChanged.connect(self._on_answer_provider_changed)
+        self.answer_cloud_provider_combo.currentIndexChanged.connect(self._update_embedding_same_summary)
+        self.api_key_input.textChanged.connect(self._update_embedding_same_summary)
         self.embedding_same_checkbox.stateChanged.connect(self._on_same_provider_toggled)
         self.embedding_strategy_combo.currentIndexChanged.connect(self._on_embedding_strategy_changed)
-        self.embedding_cloud_provider_combo.currentIndexChanged.connect(self._on_embedding_cloud_provider_changed)
-        self.embedding_cloud_api_key_input.textChanged.connect(self._on_embedding_cloud_provider_changed)
 
     # explanation: toggles visibility between same-provider summary and independent embedding fields.
     def _on_same_provider_toggled(self, *args):
@@ -7119,7 +6991,9 @@ class SettingsDialog(QDialog):
             return
         provider = self.embedding_cloud_provider_combo.currentData() or "Voyage AI"
         key = (self.embedding_cloud_api_key_input.text() or "").strip()
-        prefix = "\u2713 Detected" if key else "Detected"
+        key_hint = self._selected_provider_key_hint(self.embedding_cloud_provider_combo, EMBEDDING_CLOUD_PROVIDERS)
+        self.embedding_cloud_api_key_input.setPlaceholderText(f"Paste your embedding API key here ({key_hint})")
+        prefix = "\u2713 Selected" if key else "Selected"
         self.embedding_cloud_detected_label.setText(f"{prefix}: {provider}")
         self.embedding_cloud_detected_label.show()
 
@@ -7131,24 +7005,18 @@ class SettingsDialog(QDialog):
         if answer_choice == "local_server":
             self.embedding_same_summary_label.setText("Using: Local Server - same local server settings as above")
             return
-        api_key = (self.api_key_input.text() or "").strip() if hasattr(self, "api_key_input") else ""
-        detected = self.detect_provider() if api_key else ""
-        if detected == "OpenAI (GPT)":
+        provider_id = self.answer_cloud_provider_combo.currentData() or "openai"
+        detected = self._selected_provider_label(self.answer_cloud_provider_combo) or "selected cloud provider"
+        if provider_id == "openai":
             self.embedding_same_summary_label.setText("Using: OpenAI - same key as above")
         else:
-            label = detected or "selected cloud provider"
             self.embedding_same_summary_label.setText(
-                f"{label} cannot create embeddings here. Turn this off and choose an embedding provider below."
+                f"{detected} cannot create embeddings here. Turn this off and choose an embedding provider below."
             )
 
     # explanation: shows or hides the independent embedding cloud key.
     def _toggle_embedding_cloud_key_visibility(self):
-        if self.embedding_cloud_api_key_input.echoMode() == QLineEdit.EchoMode.Password:
-            self.embedding_cloud_api_key_input.setEchoMode(QLineEdit.EchoMode.Normal)
-            self.embedding_cloud_show_key_btn.setText("Hide")
-        else:
-            self.embedding_cloud_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-            self.embedding_cloud_show_key_btn.setText("Show")
+        self._toggle_password_visibility("embedding_cloud_api_key_input", "embedding_cloud_show_key_btn")
 
     # explanation: populates all embedding UI fields from config without triggering signals.
     def _load_embedding_settings(self):
@@ -7244,7 +7112,7 @@ class SettingsDialog(QDialog):
         else:
             api_key = (self.api_key_input.text() or "").strip()
             config["api_key"] = api_key
-            config["provider"] = self.detect_provider_type(api_key) if api_key else config.get("provider", "openai")
+            config["provider"] = self.answer_cloud_provider_combo.currentData() or "openai"
             if config["provider"] == "custom":
                 config["api_url"] = (self.api_url_input.text() or "").strip()
         config["search_config"] = sc
@@ -7438,6 +7306,11 @@ class SettingsDialog(QDialog):
 
             answer_with = self._safe_get_ui_value('answer_provider_combo', current_config.get('provider', 'api_key'))
 
+            saved_cloud_provider = self._safe_get_ui_value(
+                'answer_cloud_provider_combo',
+                current_config.get('answer_cloud_provider', current_config.get('provider', 'openai'))
+            )
+
 
 
             if answer_with == "local_server":
@@ -7448,13 +7321,13 @@ class SettingsDialog(QDialog):
 
                     provider_type = current_config.get("provider")
 
-                api_key = ""
+                api_key = current_config.get('api_key', '')
 
             else:
 
                 api_key = self._safe_get_ui_value('api_key_input', current_config.get('api_key', ''))
 
-                provider_type = self.detect_provider_type(api_key) if api_key else "openai"
+                provider_type = saved_cloud_provider
 
 
 
@@ -7467,6 +7340,8 @@ class SettingsDialog(QDialog):
                 'api_key': api_key,
 
                 'provider': provider_type,
+
+                'answer_cloud_provider': saved_cloud_provider,
 
                 'styling': {
 
@@ -7750,7 +7625,8 @@ class SettingsDialog(QDialog):
 
             'search_method_combo', 'max_results_spin', 'hybrid_weight_spin',
 
-            'answer_provider_combo', 'enable_rerank_cb', 'enable_hyde_cb',
+            'answer_provider_combo', 'answer_cloud_provider_combo', 'api_key_input',
+            'enable_rerank_cb', 'enable_hyde_cb',
 
             'min_relevance_spin', 'layout_combo', 'answer_spacing_combo',
 
@@ -7829,13 +7705,26 @@ class SettingsDialog(QDialog):
 
             if hasattr(self, 'answer_provider_combo') and not sip.isdeleted(self.answer_provider_combo):
 
-                p_idx = self.answer_provider_combo.findData(prov)
+                answer_mode = 'local_server' if prov in ['ollama', 'local_openai', 'local_server'] else 'api_key'
+                p_idx = self.answer_provider_combo.findData(answer_mode)
+                if p_idx >= 0:
+                    self.answer_provider_combo.setCurrentIndex(p_idx)
 
-                if p_idx < 0:
+            if hasattr(self, 'answer_cloud_provider_combo') and not sip.isdeleted(self.answer_cloud_provider_combo):
 
-                     p_idx = 0 if prov in ['ollama', 'local_openai', 'local_server'] else 1
+                cloud_provider_id = c.get('answer_cloud_provider') or prov
 
-                self.answer_provider_combo.setCurrentIndex(p_idx)
+                cloud_provider = {
+                    'anthropic': 'anthropic',
+                    'openai': 'openai',
+                    'google': 'google',
+                    'gemini': 'google',
+                    'openrouter': 'openrouter',
+                    'custom': 'custom',
+                }.get(cloud_provider_id, 'openai')
+                cp_idx = self.answer_cloud_provider_combo.findData(cloud_provider)
+                if cp_idx >= 0:
+                    self.answer_cloud_provider_combo.setCurrentIndex(cp_idx)
 
 
 
@@ -8254,54 +8143,6 @@ class SettingsDialog(QDialog):
         except Exception as e:
 
             showInfo(f"Error: Connection failed.\n\nError: {e}\n\nMake sure your server is running at {url}")
-
-
-
-
-
-
-
-    def detect_provider_type(self, api_key):
-
-
-
-        if api_key.startswith("sk-ant-"):
-
-
-
-            return "anthropic"
-
-
-
-        elif api_key.startswith("sk-or-"):
-
-
-
-            return "openrouter"
-
-
-
-        elif api_key.startswith("sk-"):
-
-
-
-            return "openai"
-
-
-
-        elif api_key.startswith("AI"):
-
-
-
-            return "google"
-
-
-
-        else:
-
-
-
-            return "custom"
 
 
 

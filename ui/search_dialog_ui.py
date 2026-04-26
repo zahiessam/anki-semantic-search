@@ -8,6 +8,7 @@ from aqt.qt import *
 from aqt.utils import askUser, showInfo, tooltip
 
 from .search_dialog import ContentDelegate, RelevanceBarDelegate
+from .note_preview_popup import NotePreviewPopup
 from .theme import get_addon_theme
 from .widgets import SpellCheckPlainTextEdit, _get_spell_checker
 from ..utils import get_search_history_queries, load_config
@@ -815,82 +816,6 @@ def setup_ui(self):
 
 
 
-    # Compact secondary controls
-
-
-
-    preview_label = QLabel("Preview:")
-
-
-
-    preview_label.setStyleSheet(f"font-size: 10px; color: {'#95a5a6' if is_dark else '#7f8c8d'};")
-
-
-
-    preview_label.setToolTip("Preview length (characters)")
-
-
-
-    results_header.addWidget(preview_label)
-
-
-
-    self.preview_slider = QSlider(Qt.Orientation.Horizontal)
-
-
-
-    self.preview_slider.setMinimum(50)
-
-
-
-    self.preview_slider.setMaximum(500)
-
-
-
-    self.preview_slider.setValue(150)
-
-
-
-    self.preview_slider.setMaximumWidth(80)
-
-
-
-    self.preview_slider.setToolTip("Preview length (characters)")
-
-
-
-    self.preview_slider.valueChanged.connect(self.on_preview_length_changed)
-
-
-
-    results_header.addWidget(self.preview_slider)
-
-
-
-    self.preview_length_label = QLabel("150 chars")
-
-
-
-    self.preview_length_label.setMinimumWidth(40)
-
-
-
-    self.preview_length_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-
-
-    self.preview_length_label.setStyleSheet(f"font-size: 10px; color: {'#95a5a6' if is_dark else '#7f8c8d'};")
-
-
-
-    self.preview_length_label.setToolTip("Preview length in characters")
-
-
-
-    results_header.addWidget(self.preview_length_label)
-
-
-
     self.toggle_select_btn = QPushButton("\u2713 Select All")
 
 
@@ -1036,6 +961,7 @@ def setup_ui(self):
 
 
     self.results_list.setSortingEnabled(True)
+    self.results_list.setMouseTracking(True)
 
 
 
@@ -1058,6 +984,9 @@ def setup_ui(self):
 
 
     self.results_list.itemDoubleClicked.connect(self.open_in_browser)
+    self._note_preview_popup = NotePreviewPopup(self)
+    self.results_list.cellEntered.connect(self._show_note_preview_for_cell)
+    self.results_list.viewport().installEventFilter(self._note_preview_popup)
 
 
 
@@ -1098,18 +1027,6 @@ def setup_ui(self):
 
 
     self.results_list.setAlternatingRowColors(True)
-
-
-
-
-
-
-
-    # Store preview length setting
-
-
-
-    self.preview_length = 150  # Default preview length
 
 
 
