@@ -7,7 +7,7 @@
 import time
 
 from aqt import dialogs, mw
-from aqt.qt import QApplication, QMimeData, QTimer, Qt
+from aqt.qt import QApplication, QItemSelectionModel, QMimeData, QTimer, Qt
 from aqt.utils import tooltip
 
 from ..utils import log_debug
@@ -30,6 +30,52 @@ def _restore_answer_html(self, html):
 
 
         self.answer_box.setHtml(html)
+
+
+def _selected_result_note_ids(self):
+    """Return note ids for currently highlighted rows in the results table."""
+
+    if not hasattr(self, 'results_list') or not self.results_list.selectionModel():
+        return set()
+
+    note_ids = set()
+    for index in self.results_list.selectionModel().selectedRows():
+        content_item = self.results_list.item(index.row(), 2)
+        if content_item:
+            note_id = content_item.data(Qt.ItemDataRole.UserRole)
+            if note_id:
+                note_ids.add(note_id)
+    return note_ids
+
+
+def _highlight_result_notes(self, note_ids, scroll_to_note_id=None, scroll_to_ref=None):
+    """Highlight result rows without clearing the user's existing highlighted rows."""
+
+    if not hasattr(self, 'results_list') or not self.results_list.selectionModel():
+        return
+
+    selection_model = self.results_list.selectionModel()
+    selection_model.clearSelection()
+    target_item = None
+    flags = QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
+
+    for row in range(self.results_list.rowCount()):
+        ref_item = self.results_list.item(row, 1)
+        content_item = self.results_list.item(row, 2)
+        if not content_item:
+            continue
+
+        note_id = content_item.data(Qt.ItemDataRole.UserRole)
+        is_target_ref = scroll_to_ref is not None and ref_item and str(ref_item.text()) == str(scroll_to_ref)
+        is_target_note = scroll_to_note_id is not None and note_id == scroll_to_note_id
+
+        if note_id in note_ids or is_target_ref or is_target_note:
+            selection_model.select(self.results_list.model().index(row, 0), flags)
+            if is_target_ref or is_target_note:
+                target_item = content_item
+
+    if target_item:
+        self.results_list.scrollToItem(target_item)
 
 
 
@@ -249,14 +295,6 @@ def _on_answer_link_clicked(self, url):
 
 
 
-        if hasattr(self, 'selected_note_ids'):
-
-
-
-            self.selected_note_ids.add(note_id)
-
-
-
         max_score = self.all_scored_notes[0][0]
 
 
@@ -304,6 +342,8 @@ def _on_answer_link_clicked(self, url):
             self.sensitivity_slider.blockSignals(False)
 
 
+
+        highlighted_note_ids = _selected_result_note_ids(self)
 
         order = {nid: i for i, nid in enumerate(ctx)}
 
@@ -353,55 +393,9 @@ def _on_answer_link_clicked(self, url):
 
 
 
-        # Scroll to and highlight the note row (match by Ref when available so chunk display scrolls to cited ref)
-
-
-
-        for row in range(self.results_list.rowCount()):
-
-
-
-            ref_item = self.results_list.item(row, 0)
-
-
-
-            content_item = self.results_list.item(row, 1)
-
-
-
-            if num is not None and ref_item and str(ref_item.text()) == str(num):
-
-
-
-                if content_item:
-
-
-
-                    self.results_list.selectRow(row)
-
-
-
-                    self.results_list.scrollToItem(content_item)
-
-
-
-                break
-
-
-
-            if num is None and content_item and content_item.data(Qt.ItemDataRole.UserRole) == note_id:
-
-
-
-                self.results_list.selectRow(row)
-
-
-
-                self.results_list.scrollToItem(content_item)
-
-
-
-                break
+        # Scroll to and highlight the note row, while preserving rows the user already highlighted.
+        highlighted_note_ids.add(note_id)
+        _highlight_result_notes(self, highlighted_note_ids, scroll_to_note_id=note_id, scroll_to_ref=num)
 
 
 

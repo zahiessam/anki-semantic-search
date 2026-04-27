@@ -112,6 +112,9 @@ class ContentDelegate(QStyledItemDelegate):
         if option.state & QStyle.StateFlag.State_Selected:
             painter.fillRect(option.rect, option.palette.highlight())
             painter.setPen(option.palette.highlightedText().color())
+            font = painter.font()
+            font.setBold(True)
+            painter.setFont(font)
         else:
             painter.setPen(option.palette.text().color())
 

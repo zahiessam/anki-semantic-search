@@ -79,6 +79,21 @@ EMBEDDING_CLOUD_PROVIDERS = [
     ("Cohere", "Cohere", "co-..."),
 ]
 
+ANSWER_KEY_PROVIDER_PREFIXES = (
+    ("sk-ant-", "anthropic"),
+    ("sk-or-", "openrouter"),
+    ("AI", "google"),
+    ("sk-", "openai"),
+)
+
+EMBEDDING_KEY_PROVIDER_PREFIXES = (
+    ("sk-ant-", None),
+    ("sk-or-", None),
+    ("pa-", "Voyage AI"),
+    ("co-", "Cohere"),
+    ("sk-", "OpenAI"),
+)
+
 
 class SettingsDialog(QDialog):
 
@@ -370,8 +385,6 @@ class SettingsDialog(QDialog):
         self.max_results_spin.setValue(50) # Comprehensive for medical use
 
         self.hybrid_weight_spin.setValue(40) # Slightly favor keywords for drug names/genes
-
-        self.strict_relevance_cb.setChecked(True)
 
         self.enable_query_expansion_cb.setChecked(True) # AI synonyms are great for medicine
 
@@ -705,6 +718,7 @@ class SettingsDialog(QDialog):
 
 
         self.api_url_input.setPlaceholderText("https://api.example.com/v1/chat/completions")
+        self.api_url_input.textChanged.connect(self.detect_provider)
 
 
 
@@ -2538,10 +2552,6 @@ class SettingsDialog(QDialog):
 
         accuracy_layout.addWidget(settings_field_row(theme, self.relevance_from_answer_cb))
 
-        self.strict_relevance_cb = QCheckBox("Strict Filter (Reduces tangential cards)")
-
-        accuracy_layout.addWidget(settings_field_row(theme, self.strict_relevance_cb))
-
         accuracy_section.addLayout(accuracy_layout)
 
         search_layout.addWidget(accuracy_section)
@@ -2592,6 +2602,12 @@ class SettingsDialog(QDialog):
         self.check_rerank_btn = QPushButton("Check again")
         self.check_rerank_btn.clicked.connect(self._on_check_rerank_again)
         action_row.addWidget(self.check_rerank_btn)
+
+        self.install_anki_python_btn = QPushButton("Try Anki Python fallback")
+        self.install_anki_python_btn.setToolTip("Fallback only: external Python is recommended for Cross-Encoder setup.")
+        self.install_anki_python_btn.clicked.connect(lambda: install_dependencies(python_exe=None))
+        action_row.addWidget(self.install_anki_python_btn)
+
         python_path_layout.addLayout(action_row)
 
         self.python_path_row = settings_field_row(theme, self.python_path_widget, vertical=True)
@@ -2609,40 +2625,6 @@ class SettingsDialog(QDialog):
         search_layout.addWidget(rerank_section)
 
 
-
-        # --- 6. TECHNICAL DIAGNOSTICS (LAST PLACE) ---
-
-        tech_section = CollapsibleSection("Technical Diagnostics (Expert Only)", is_expanded=False)
-
-        tech_layout = QVBoxLayout()
-
-        tech_layout.setContentsMargins(0, 0, 0, 0)
-
-        tech_layout.setSpacing(8)
-
-        self.verbose_search_debug_cb = QCheckBox("Verbose Search Debug")
-
-        tech_layout.addWidget(settings_field_row(theme, self.verbose_search_debug_cb))
-
-        self.extra_stop_words_input = QLineEdit()
-
-        tech_layout.addWidget(settings_field_row(theme, self.extra_stop_words_input, "Extra Stop-words:"))
-
-        self.context_chars_per_note_spin = QSpinBox()
-
-        self.context_chars_per_note_spin.setRange(0, 5000)
-
-        tech_layout.addWidget(settings_field_row(theme, self.context_chars_per_note_spin, "Max chars/note:"))
-
-        self.install_anki_python_btn = QPushButton("Advanced: try Anki Python")
-
-        self.install_anki_python_btn.clicked.connect(lambda: install_dependencies(python_exe=None))
-
-        tech_layout.addWidget(settings_field_row(theme, self.install_anki_python_btn))
-
-        tech_section.addLayout(tech_layout)
-
-        search_layout.addWidget(tech_section)
 
         # explanation: legacy embedding widgets stay hidden so older helper methods remain safe.
         self.embedding_section = CollapsibleSection("Embeddings (for semantic search)", is_expanded=False)
@@ -3336,11 +3318,7 @@ class SettingsDialog(QDialog):
 
         self._safe_set_checked(getattr(self, "use_context_boost_cb", None), search_config.get('use_context_boost', True))
 
-        self._safe_set_checked(getattr(self, "strict_relevance_cb", None), search_config.get('strict_relevance', True))
-
         self._safe_set_checked(getattr(self, "relevance_from_answer_cb", None), search_config.get('relevance_from_answer', False))
-
-        self._safe_set_checked(getattr(self, "verbose_search_debug_cb", None), search_config.get('verbose_search_debug', False))
 
         self._safe_set_checked(getattr(self, "use_dynamic_batch_size_cb", None), search_config.get('use_dynamic_batch_size', True))
 
@@ -6911,6 +6889,46 @@ class SettingsDialog(QDialog):
         if idx >= 0:
             combo.setCurrentIndex(idx)
 
+    def _detect_provider_from_key(self, api_key, prefixes):
+        key = (api_key or "").strip()
+        if not key:
+            return None
+        for prefix, provider_id in prefixes:
+            if key.startswith(prefix):
+                return provider_id
+        return None
+
+    def _key_matches_known_prefix(self, api_key, prefixes):
+        key = (api_key or "").strip()
+        return bool(key) and any(key.startswith(prefix) for prefix, _provider_id in prefixes)
+
+    def _select_detected_provider(self, combo, provider_id):
+        if not combo or not provider_id:
+            return False
+        idx = combo.findData(provider_id)
+        if idx < 0 or idx == combo.currentIndex():
+            return idx >= 0
+        combo.blockSignals(True)
+        try:
+            combo.setCurrentIndex(idx)
+        finally:
+            combo.blockSignals(False)
+        return True
+
+    def _custom_provider_hint(self):
+        api_url = ""
+        if hasattr(self, "api_url_input"):
+            api_url = (self.api_url_input.text() or "").strip()
+        if not api_url:
+            return "Custom / OpenAI-compatible. Enter the provider's chat completions API URL."
+        try:
+            from urllib.parse import urlparse
+
+            host = urlparse(api_url).netloc
+        except Exception:
+            host = ""
+        return f"Custom / OpenAI-compatible via {host or api_url}"
+
     def _toggle_password_visibility(self, input_attr, button_attr):
         key_input = getattr(self, input_attr, None)
         show_button = getattr(self, button_attr, None)
@@ -6925,6 +6943,10 @@ class SettingsDialog(QDialog):
 
     def detect_provider(self):
         api_key = self.api_key_input.text().strip()
+        current_provider_id = self.answer_cloud_provider_combo.currentData() or "openai"
+        detected_provider_id = self._detect_provider_from_key(api_key, ANSWER_KEY_PROVIDER_PREFIXES)
+        if detected_provider_id and current_provider_id != "custom":
+            self._select_detected_provider(self.answer_cloud_provider_combo, detected_provider_id)
         provider_id = self.answer_cloud_provider_combo.currentData() or "openai"
         provider = self._selected_provider_label(self.answer_cloud_provider_combo) or "OpenAI (GPT)"
         is_custom = provider_id == "custom"
@@ -6937,9 +6959,19 @@ class SettingsDialog(QDialog):
             self.url_widget.setVisible(is_custom)
 
         if not api_key:
-            self.provider_label.setText(f"Selected: {provider}")
+            if provider_id == "custom":
+                self.provider_label.setText(f"Selected: {self._custom_provider_hint()}")
+            else:
+                self.provider_label.setText(f"Selected: {provider}")
+        elif detected_provider_id and provider_id == detected_provider_id:
+            self.provider_label.setText(f"\u2713 Detected: {provider}")
+        elif provider_id == "custom":
+            self.provider_label.setText(f"\u2713 Using: {self._custom_provider_hint()}")
         else:
-            self.provider_label.setText(f"\u2713 Selected: {provider}")
+            self.provider_label.setText(
+                f"\u2713 Using selected provider: {provider}. "
+                "If this key is for an unlisted provider, choose Custom / OpenAI-compatible and set the API URL."
+            )
         self.provider_label.show()
         return provider
 
@@ -6989,12 +7021,27 @@ class SettingsDialog(QDialog):
     def _on_embedding_cloud_provider_changed(self, *args):
         if not hasattr(self, "embedding_cloud_provider_combo"):
             return
-        provider = self.embedding_cloud_provider_combo.currentData() or "Voyage AI"
         key = (self.embedding_cloud_api_key_input.text() or "").strip()
+        detected_provider = self._detect_provider_from_key(key, EMBEDDING_KEY_PROVIDER_PREFIXES)
+        if detected_provider:
+            self._select_detected_provider(self.embedding_cloud_provider_combo, detected_provider)
+        provider = self.embedding_cloud_provider_combo.currentData() or "Voyage AI"
         key_hint = self._selected_provider_key_hint(self.embedding_cloud_provider_combo, EMBEDDING_CLOUD_PROVIDERS)
         self.embedding_cloud_api_key_input.setPlaceholderText(f"Paste your embedding API key here ({key_hint})")
-        prefix = "\u2713 Selected" if key else "Selected"
-        self.embedding_cloud_detected_label.setText(f"{prefix}: {provider}")
+        if not key:
+            self.embedding_cloud_detected_label.setText(f"Selected: {provider}")
+        elif detected_provider:
+            self.embedding_cloud_detected_label.setText(f"\u2713 Detected: {provider}")
+        elif self._key_matches_known_prefix(key, EMBEDDING_KEY_PROVIDER_PREFIXES):
+            self.embedding_cloud_detected_label.setText(
+                "This key looks like an answer-provider key. "
+                "Choose Voyage AI, OpenAI, or Cohere for cloud embeddings."
+            )
+        else:
+            self.embedding_cloud_detected_label.setText(
+                f"\u2713 Using selected provider: {provider}. "
+                "Unlisted answer providers usually cannot be used for embeddings here."
+            )
         self.embedding_cloud_detected_label.show()
 
     # explanation: updates the same-provider summary and warning based on current answer settings.
@@ -7335,6 +7382,10 @@ class SettingsDialog(QDialog):
 
 
 
+            relevance_mode = (current_sc.get('relevance_mode') or 'balanced').lower()
+            if relevance_mode not in ('focused', 'balanced', 'broad'):
+                relevance_mode = 'balanced'
+
             config = {
 
                 'api_key': api_key,
@@ -7387,27 +7438,13 @@ class SettingsDialog(QDialog):
 
                     'min_relevance_percent': self._safe_get_ui_value('min_relevance_spin', current_sc.get('min_relevance_percent', 55)),
 
-                    'strict_relevance': self._safe_get_ui_value('strict_relevance_cb', current_sc.get('strict_relevance', True)),
+                    'relevance_mode': relevance_mode,
 
                     'max_results': self._safe_get_ui_value('max_results_spin', current_sc.get('max_results', 50)),
-
-                    'context_chars_per_note': self._safe_get_ui_value('context_chars_per_note_spin', current_sc.get('context_chars_per_note', 0)),
 
                     'relevance_from_answer': self._safe_get_ui_value('relevance_from_answer_cb', current_sc.get('relevance_from_answer', False)),
 
                     'hybrid_embedding_weight': self._safe_get_ui_value('hybrid_weight_spin', current_sc.get('hybrid_embedding_weight', 40)),
-
-                    'extra_stop_words': [
-
-                        w.strip().lower()
-
-                        for w in (self._safe_get_ui_value('extra_stop_words_input', "")).split(",")
-
-                        if w.strip()
-
-                    ],
-
-                    'verbose_search_debug': self._safe_get_ui_value('verbose_search_debug_cb', current_sc.get('verbose_search_debug', False)),
 
                     'embedding_engine': self._safe_get_ui_value('embedding_engine_combo', current_sc.get('embedding_engine', 'voyage')),
 
@@ -7634,7 +7671,7 @@ class SettingsDialog(QDialog):
 
             'label_font_spin', 'width_spin', 'height_spin', 'section_spacing_spin',
 
-            'use_context_boost_cb', 'strict_relevance_cb', 'relevance_from_answer_cb',
+            'use_context_boost_cb', 'relevance_from_answer_cb',
 
             'embedding_same_checkbox', 'embedding_strategy_combo',
             'embedding_cloud_provider_combo', 'embedding_cloud_api_key_input',
@@ -7756,13 +7793,7 @@ class SettingsDialog(QDialog):
 
             self._safe_set_checked(getattr(self, 'use_context_boost_cb', None), sc.get('use_context_boost', True))
 
-            self._safe_set_checked(getattr(self, 'strict_relevance_cb', None), sc.get('strict_relevance', True))
-
             self._safe_set_checked(getattr(self, 'relevance_from_answer_cb', None), sc.get('relevance_from_answer', False))
-
-            self._safe_set_checked(getattr(self, 'verbose_search_debug_cb', None), sc.get('verbose_search_debug', False))
-
-
 
             # --- Persistent Rerank Path Fix ---
 
@@ -8506,7 +8537,7 @@ class SettingsDialog(QDialog):
 
 
 
-                "Clear the external path and use 'Advanced: try Anki Python' in Technical Diagnostics.\n"
+                "Clear the external path and use 'Try Anki Python fallback' in Re-Ranking.\n"
                 "This can fail on Windows because Anki's Python may not load torch/sentence-transformers.\n\n"
 
 

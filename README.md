@@ -118,7 +118,7 @@ Clinical accuracy tuning:
 - Max results pool.
 - Hybrid embedding weight.
 - Relevance from answer.
-- Strict relevance filtering. This preference is persisted in `search_config.strict_relevance` and should remain checked/unchecked after restart.
+- Relevance mode: Focused, Balanced, or Broad.
 
 Re-ranking:
 
@@ -282,15 +282,8 @@ Logs and user data are stored under `user_files/` where possible. Logs redact se
 - Use Note Types & Fields to limit searchable fields.
 - Enable Query Expansion for medical synonyms.
 - Enable Cross-Encoder re-ranking if installed.
-- Try Strict Filter.
+- Try Focused relevance mode.
 - Review extra stop words.
-
-### Strict Filter does not stay checked
-
-- Open Settings, check Strict Filter, and click Save Settings.
-- Restart Anki and reopen Settings.
-- The value is saved as `search_config.strict_relevance` in `config.json`.
-- If the checkbox still resets, confirm Anki can write to the add-on folder and that `config.json` is not read-only.
 
 ### Embeddings fail
 

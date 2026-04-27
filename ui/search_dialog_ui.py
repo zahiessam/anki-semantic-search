@@ -52,8 +52,6 @@ def reset_to_medical_defaults(self):
 
     self.hybrid_weight_spin.setValue(40) # Slightly favor keywords for drug names/genes
 
-    self.strict_relevance_cb.setChecked(True)
-
     self.enable_query_expansion_cb.setChecked(True) # AI synonyms are great for medicine
 
     self.use_ai_generic_term_detection_cb.setChecked(True)
@@ -852,7 +850,7 @@ def setup_ui(self):
 
 
 
-    # Create table: Ref (citation [1],[2]...) | Content | Note ID | Relevance
+    # Create table: Select | Ref (citation [1],[2]...) | Content | Note ID | Relevance
 
 
 
@@ -860,11 +858,11 @@ def setup_ui(self):
 
 
 
-    self.results_list.setColumnCount(4)
+    self.results_list.setColumnCount(5)
 
 
 
-    self.results_list.setHorizontalHeaderLabels(["Ref", "Content", "Note ID", "Relevance"])
+    self.results_list.setHorizontalHeaderLabels(["✓", "Ref", "Content", "Note ID", "Relevance"])
 
 
 
@@ -896,23 +894,25 @@ def setup_ui(self):
 
 
 
-    self.results_list.setColumnWidth(0, 42)   # Ref (citation number matching [1], [2] in answer)
+    self.results_list.setColumnWidth(0, 38)   # Selection checkbox
 
 
 
-    self.results_list.setColumnWidth(1, 400)  # Content
+    self.results_list.setColumnWidth(1, 42)   # Ref (citation number matching [1], [2] in answer)
 
 
 
-    self.results_list.setColumnWidth(2, 80)   # Note ID (hidden by default)
+    self.results_list.setColumnWidth(2, 400)  # Content
 
 
 
-    self.results_list.setColumnWidth(3, 100)  # Relevance (bar + %)
+    self.results_list.setColumnWidth(3, 80)   # Note ID (hidden by default)
 
 
 
-    self.results_list.setColumnHidden(2, True)  # Hide Note ID column (right-click header to show)
+    self.results_list.setColumnWidth(4, 100)  # Relevance (bar + %)
+
+    self.results_list.setColumnHidden(3, True)  # Hide Note ID column (right-click header to show)
 
 
 
@@ -924,15 +924,17 @@ def setup_ui(self):
 
 
 
-    self.results_list.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+    self.results_list.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
 
 
 
-    self.results_list.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+    self.results_list.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
 
 
 
     self.results_list.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+
+    self.results_list.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
 
 
 
@@ -965,13 +967,13 @@ def setup_ui(self):
 
 
 
-    self.results_list.setItemDelegateForColumn(1, ContentDelegate(self.results_list)) # First field normally, both on hover
+    self.results_list.setItemDelegateForColumn(2, ContentDelegate(self.results_list)) # First field normally, both on hover
 
-    self.results_list.setItemDelegateForColumn(3, RelevanceBarDelegate(self.results_list))  # Relevance bar + %
+    self.results_list.setItemDelegateForColumn(4, RelevanceBarDelegate(self.results_list))  # Relevance bar + %
 
 
 
-    self.results_list.sortItems(3, Qt.SortOrder.DescendingOrder)  # Sort by Relevance
+    self.results_list.sortItems(4, Qt.SortOrder.DescendingOrder)  # Sort by Relevance
 
 
 
@@ -1186,7 +1188,7 @@ def setup_ui(self):
 
 
 
-    # Determine initial mode from config (fallback to strict_relevance when missing)
+    # Determine initial mode from config.
 
 
 
@@ -1207,26 +1209,7 @@ def setup_ui(self):
 
 
     if not sc_mode:
-
-
-
-        try:
-
-
-
-            sc = load_config().get("search_config", {})
-
-
-
-            sc_mode = "focused" if sc.get("strict_relevance", True) else "balanced"
-
-
-
-        except Exception:
-
-
-
-            sc_mode = "balanced"
+        sc_mode = "balanced"
 
 
 
@@ -1894,26 +1877,6 @@ def setup_ui(self):
 
 
 
-    # Enable buttons based on selections
-
-
-
-    self.results_list.itemSelectionChanged.connect(
-
-
-
-        lambda: self.view_btn.setEnabled(bool(self.results_list.selectedItems()))
-
-
-
-    )
-
-
-
-
-
-
-
     self.results_list.itemSelectionChanged.connect(self._update_view_all_button_state)
 
 
@@ -1926,7 +1889,7 @@ def setup_ui(self):
 
 
 
-    # Only track changes in column 1 (content column with checkbox)
+    # Only track changes in column 0 (dedicated checkbox column)
 
 
 

@@ -276,11 +276,55 @@ def initialize_search_dialog(dialog, parent=None):
 
 
 
-        QTableWidget::item:selected {{ background-color: {theme['accent']}; color: {theme['selected_text']}; }}
+        QTableWidget::item:selected {{ background-color: {theme['accent']}; color: {theme['selected_text']}; font-weight: 700; }}
 
 
 
         QTableWidget::item:selected:hover {{ background-color: {theme['accent_hover']}; }}
+
+
+
+        QTableWidget::indicator {{
+
+            width: 16px;
+
+            height: 16px;
+
+            border-radius: 3px;
+
+            border: 1px solid {theme['control_hover_border']};
+
+            background-color: {theme['input_bg']};
+
+        }}
+
+
+
+        QTableWidget::indicator:hover {{
+
+            border: 2px solid {theme['accent']};
+
+        }}
+
+
+
+        QTableWidget::indicator:checked {{
+
+            border: 2px solid {theme['selected_text']};
+
+            background-color: {theme['success']};
+
+        }}
+
+
+
+        QTableWidget::indicator:checked:selected {{
+
+            border: 2px solid {theme['selected_text']};
+
+            background-color: {theme['success']};
+
+        }}
 
 
 

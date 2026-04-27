@@ -391,7 +391,7 @@ def on_item_changed(self, item):
 
 
 
-    if item.column() == 1:  # Only process changes in content column (checkbox)
+    if item.column() == 0:  # Selection checkbox column
 
 
 
@@ -515,7 +515,7 @@ def _on_relevance_mode_changed(self, _btn, checked):
 
 
 
-    # Persist last-used mode and keep strict_relevance in sync for compatibility
+    # Persist last-used mode.
 
 
 
@@ -532,10 +532,6 @@ def _on_relevance_mode_changed(self, _btn, checked):
 
 
         sc["relevance_mode"] = mode_key
-
-
-
-        sc["strict_relevance"] = True if mode_key == "focused" else False
 
 
 

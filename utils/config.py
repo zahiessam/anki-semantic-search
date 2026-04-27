@@ -49,7 +49,6 @@ DEFAULT_CONFIG = {
         "enable_rerank": True,
         "use_context_boost": True,
         "min_relevance_percent": 55,
-        "strict_relevance": True,
         "max_results": 50,
         "context_chars_per_note": 0,
         "relevance_from_answer": True,
@@ -155,15 +154,21 @@ def load_config():
         config_path = get_config_file_path()
         if not os.path.exists(config_path):
             log_debug(f"Config file does not exist: {config_path}, using defaults")
-            return dict(DEFAULT_CONFIG)
+            return _deep_merge(DEFAULT_CONFIG, {})
         with open(config_path, "r", encoding="utf-8") as f:
             file_config = json.load(f)
         merged = _deep_merge(DEFAULT_CONFIG, file_config)
+        file_search_config = file_config.get("search_config") or {}
+        search_config = dict(merged.get("search_config") or {})
+        mode = (search_config.get("relevance_mode") or "").strip().lower()
+        if "relevance_mode" not in file_search_config:
+            search_config["relevance_mode"] = "balanced"
+        merged["search_config"] = search_config
         log_debug(f"Config loaded from file (merged with defaults)")
         return merged
     except Exception as e:
         log_debug(f"Error loading config file: {e}")
-        return dict(DEFAULT_CONFIG)
+        return _deep_merge(DEFAULT_CONFIG, {})
 
 
 def get_config_value(config, key, default):

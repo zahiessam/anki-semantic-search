@@ -1777,6 +1777,40 @@ class AnthropicStreamWorker(QThread):
 
             )
 
+        elif any(x in error_msg.lower() for x in ('n_ctx', 'n_keep', 'context length', 'context_length', 'maximum context')):
+
+
+
+            if hasattr(self, 'answer_source_label'):
+
+
+
+                self.answer_source_label.setText("")
+
+
+
+            self.answer_box.setText(
+
+
+
+                "Local LLM context is too small for this answer.\n\n"
+
+
+
+                "LM Studio rejected the prompt because the retrieved note context plus the requested answer length exceeded the loaded Context Length.\n\n"
+
+
+
+                "Fix: open LM Studio -> Developer -> Local Server -> loaded model -> Context and Offload, then increase Context Length. For Qwen3-VL-8B-Instruct, try 8192 first; use 12288-16384 if your GPU/RAM can handle it.\n\n"
+
+
+
+                "You can also reduce the number of retrieved notes or set a smaller context-per-note limit in the add-on settings."
+
+
+
+            )
+
 
 
         else:
@@ -2352,6 +2386,12 @@ class AnthropicStreamWorker(QThread):
 
 
             self.toggle_select_btn.setEnabled(False)
+
+        if hasattr(self, 'view_btn'):
+
+
+
+            self.view_btn.setEnabled(False)
 
 
 
@@ -3360,22 +3400,11 @@ class AnthropicStreamWorker(QThread):
 
 
         if mode not in ('focused', 'balanced', 'broad'):
-
-
-
-            # Backwards compatibility: infer from strict_relevance when mode missing
-
-
-
-            mode = 'focused' if search_config.get('strict_relevance', True) else 'balanced'
+            mode = 'balanced'
 
 
 
         self._effective_relevance_mode = mode
-
-
-
-        self._effective_strict_relevance = (mode == 'focused')
 
 
 
@@ -7683,6 +7712,10 @@ Rules:
 
 
 
+        checked_note_ids = set(getattr(self, 'selected_note_ids', set()) or [])
+
+
+
         # Use chunk-level display list when AI received more items than aggregated display (fixes Ref 35 vs 32)
 
 
@@ -7743,7 +7776,12 @@ Rules:
 
 
 
-        # Clear table
+        # Clear and repopulate the table without letting transient unchecked items erase
+        # the user's checked-note selections.
+
+
+
+        self.results_list.blockSignals(True)
 
 
 
@@ -7811,11 +7849,10 @@ Rules:
 
 
 
-        # Prefer per-search effective strictness when available
-
-
-
-        strict = bool(getattr(self, '_effective_strict_relevance', sc.get('strict_relevance', False)))
+        mode = getattr(self, '_effective_relevance_mode', getattr(self, 'relevance_mode', None))
+        if not mode:
+            mode = (sc.get('relevance_mode') or 'balanced')
+        strict = str(mode or 'balanced').lower() == 'focused'
 
 
 
@@ -8243,7 +8280,20 @@ Rules:
 
 
 
-            self.results_list.setItem(row, 0, order_item)
+            select_item = QTableWidgetItem()
+            select_item.setCheckState(
+                Qt.CheckState.Checked if note['id'] in checked_note_ids else Qt.CheckState.Unchecked
+            )
+            select_item.setData(Qt.ItemDataRole.UserRole, note['id'])
+            select_item.setFlags(
+                (select_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                & ~Qt.ItemFlag.ItemIsEditable
+            )
+            select_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+            select_item.setToolTip("Select this note for View Selected")
+            self.results_list.setItem(row, 0, select_item)
+
+            self.results_list.setItem(row, 1, order_item)
 
 
 
@@ -8251,7 +8301,7 @@ Rules:
 
 
 
-            # Column 1: Content (with checkbox)
+            # Column 2: Content
 
 
 
@@ -8276,10 +8326,6 @@ Rules:
 
 
             content_item = QTableWidgetItem(display_content)
-
-
-
-            content_item.setCheckState(Qt.CheckState.Unchecked)
 
 
 
@@ -8310,11 +8356,11 @@ Rules:
 
 
 
-            content_item.setFlags(content_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            content_item.setFlags(content_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
 
 
 
-            self.results_list.setItem(row, 1, content_item)
+            self.results_list.setItem(row, 2, content_item)
 
 
 
@@ -8322,7 +8368,7 @@ Rules:
 
 
 
-            # Column 2: Note ID
+            # Column 3: Note ID
 
 
 
@@ -8346,7 +8392,7 @@ Rules:
 
 
 
-            self.results_list.setItem(row, 2, note_id_item)
+            self.results_list.setItem(row, 3, note_id_item)
 
 
 
@@ -8354,7 +8400,7 @@ Rules:
 
 
 
-            # Column 3: Relevance (steepened display %)
+            # Column 4: Relevance (steepened display %)
 
 
 
@@ -8510,7 +8556,7 @@ Rules:
 
 
 
-            self.results_list.setItem(row, 3, percentage_item)
+            self.results_list.setItem(row, 4, percentage_item)
 
 
 
@@ -8666,6 +8712,10 @@ Rules:
 
 
 
+        self.results_list.blockSignals(False)
+
+
+
         # Restore selections from persistence
 
 
@@ -8718,7 +8768,7 @@ Rules:
 
 
 
-            self.results_list.sortItems(0, Qt.SortOrder.AscendingOrder)
+            self.results_list.sortItems(1, Qt.SortOrder.AscendingOrder)
 
 
 
@@ -8726,7 +8776,7 @@ Rules:
 
 
 
-            self.results_list.sortItems(3, Qt.SortOrder.DescendingOrder)  # Sort by Relevance
+            self.results_list.sortItems(4, Qt.SortOrder.DescendingOrder)  # Sort by Relevance
 
 
 
@@ -8784,7 +8834,7 @@ Rules:
 
 
 
-        # Update persistence set and count (check column 1 = Content which has the checkbox)
+        # Update persistence set and count (column 0 is the selection checkbox)
 
 
 
@@ -8792,7 +8842,7 @@ Rules:
 
 
 
-            item = self.results_list.item(row, 1)  # Content column has checkbox
+            item = self.results_list.item(row, 0)
 
 
 
@@ -8888,6 +8938,11 @@ Rules:
 
 
 
+        if hasattr(self, 'view_btn'):
+            self.view_btn.setEnabled(checked_count > 0)
+
+
+
 
 
 
@@ -8940,7 +8995,7 @@ Rules:
 
 
 
-        # Check if all are selected (check column 1 = Content which has the checkbox)
+        # Check if all visible rows are selected.
 
 
 
@@ -8952,7 +9007,7 @@ Rules:
 
 
 
-            item = self.results_list.item(row, 1)
+            item = self.results_list.item(row, 0)
 
 
 
@@ -9028,7 +9083,7 @@ Rules:
 
 
 
-            item = self.results_list.item(row, 1)  # Content column has checkbox
+            item = self.results_list.item(row, 0)
 
 
 
@@ -9108,7 +9163,7 @@ Rules:
 
 
 
-            item = self.results_list.item(row, 1)  # Content column has checkbox
+            item = self.results_list.item(row, 0)
 
 
 
@@ -9188,7 +9243,7 @@ Rules:
 
 
 
-            item = self.results_list.item(row, 1)  # Content column has checkbox
+            item = self.results_list.item(row, 0)
 
 
 
@@ -9228,7 +9283,7 @@ Rules:
 
 
 
-            item = self.results_list.item(row, 1)  # Content column has checkbox
+            item = self.results_list.item(row, 0)
 
 
 
@@ -9320,7 +9375,7 @@ Rules:
 
 
 
-            item = self.results_list.item(row, 1)  # Content column has note ID in UserRole
+            item = self.results_list.item(row, 0)
 
 
 
@@ -9384,11 +9439,11 @@ Rules:
 
 
 
-        # Get note ID from content column (column 1 = Content)
+        # Get note ID from the hidden selection-data column.
 
 
 
-        content_item = self.results_list.item(row, 1)
+        content_item = self.results_list.item(row, 0)
 
 
 
@@ -9420,7 +9475,7 @@ Rules:
 
 
     def _show_note_preview_for_cell(self, row, column):
-        if column != 1 or not hasattr(self, '_note_preview_popup'):
+        if column != 2 or not hasattr(self, '_note_preview_popup'):
             if hasattr(self, '_note_preview_popup'):
                 self._note_preview_popup.hide()
             return

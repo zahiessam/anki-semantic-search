@@ -8,13 +8,38 @@ def _addon_dir():
 
 
 def _profile_hash():
-    """Profile-specific hash for storage paths (main thread only)."""
+    """Collection-specific hash for storage paths (main thread only).
+
+    Prefer the collection creation timestamp over the profile name/path so
+    moving the Anki2 folder or renaming the profile does not orphan an
+    existing embeddings database.
+    """
     try:
         from aqt import mw
+        import hashlib
+
+        col = getattr(mw, "col", None) if mw else None
+        if col:
+            crt = getattr(col, "crt", None)
+            if callable(crt):
+                crt = crt()
+            if not crt and getattr(col, "db", None):
+                crt = col.db.scalar("select crt from col")
+            if crt:
+                return hashlib.md5(f"collection:{crt}".encode("utf-8")).hexdigest()[:12]
+
+        pm = getattr(mw, "pm", None) if mw else None
+        profile_name = getattr(pm, "name", None)
+        if callable(profile_name):
+            profile_name = profile_name()
+        if profile_name:
+            return hashlib.md5(str(profile_name).encode("utf-8")).hexdigest()[:12]
+
         if mw and getattr(mw, "col", None) and getattr(mw.col, "path", None):
-            import hashlib
-            profile_key = mw.col.path.encode("utf-8") if isinstance(mw.col.path, str) else str(mw.col.path).encode("utf-8")
-            return hashlib.md5(profile_key).hexdigest()[:12]
+            col_path = str(mw.col.path)
+            parent_name = os.path.basename(os.path.dirname(col_path))
+            profile_key = parent_name or col_path
+            return hashlib.md5(profile_key.encode("utf-8")).hexdigest()[:12]
     except Exception:
         pass
     return None
@@ -42,12 +67,30 @@ def get_embeddings_storage_path():
 
 
 def get_embeddings_db_path():
-    """Get path to SQLite embeddings database (profile-specific)."""
+    """Get path to SQLite embeddings database (collection-specific)."""
     user_dir = _user_files_dir()
     h = _profile_hash()
     if h:
         return os.path.join(user_dir, f"embeddings_{h}.db")
     return os.path.join(user_dir, "embeddings.db")
+
+
+def get_embeddings_db_path_for_read():
+    """Path for loading embeddings; falls back to the largest existing DB."""
+    path = get_embeddings_db_path()
+    if os.path.exists(path):
+        return path
+    try:
+        import glob
+        candidates = glob.glob(os.path.join(_user_files_dir(), "embeddings_*.db"))
+        candidates = [p for p in candidates if os.path.isfile(p)]
+        if candidates:
+            candidates.sort(key=lambda p: os.path.getsize(p), reverse=True)
+            log_debug(f"Using existing embeddings DB (profile path not found): {os.path.basename(candidates[0])}")
+            return candidates[0]
+    except Exception as e:
+        log_debug(f"Fallback DB lookup failed: {e}")
+    return path
 
 
 def get_embeddings_storage_path_for_read():
@@ -58,7 +101,7 @@ def get_embeddings_storage_path_for_read():
     addon_dir = _addon_dir()
     try:
         import glob
-        candidates = glob.glob(os.path.join(addon_dir, "embeddings_cache_*.json"))
+        candidates = glob.glob(os.path.join(_user_files_dir(), "embeddings_cache_*.json"))
         candidates = [p for p in candidates if not p.endswith(".tmp") and ".recovered" not in p]
         if candidates:
             if len(candidates) == 1:
