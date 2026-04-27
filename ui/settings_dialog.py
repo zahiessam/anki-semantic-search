@@ -2578,7 +2578,6 @@ class SettingsDialog(QDialog):
 
         python_label = QLabel("Use external Python")
         python_label.setStyleSheet("font-weight: bold;")
-        python_path_layout.addWidget(python_label)
 
         path_row = QHBoxLayout()
         self.rerank_python_path_input = QLineEdit()
@@ -2592,7 +2591,7 @@ class SettingsDialog(QDialog):
         self.browse_rerank_python_btn = QPushButton("Browse")
         self.browse_rerank_python_btn.clicked.connect(self._on_browse_rerank_python)
         path_row.addWidget(self.browse_rerank_python_btn)
-        python_path_layout.addLayout(path_row)
+        python_path_layout.addWidget(settings_field_row(theme, label=python_label, layout=path_row))
 
         action_row = QHBoxLayout()
         self.install_external_btn = QPushButton("Install / show command for external Python")
@@ -2608,11 +2607,9 @@ class SettingsDialog(QDialog):
         self.install_anki_python_btn.clicked.connect(lambda: install_dependencies(python_exe=None))
         action_row.addWidget(self.install_anki_python_btn)
 
-        python_path_layout.addLayout(action_row)
+        python_path_layout.addWidget(settings_field_row(theme, layout=action_row))
 
-        self.python_path_row = settings_field_row(theme, self.python_path_widget, vertical=True)
-
-        rerank_section.addWidget(self.python_path_row)
+        rerank_section.addWidget(self.python_path_widget)
         self.python_path_widget.setVisible(True)
 
         self.enable_rerank_cb = QCheckBox("Improve result order with Cross-Encoder")
@@ -3131,7 +3128,7 @@ class SettingsDialog(QDialog):
 
 
 
-        if provider == 'ollama':
+        if provider == 'ollama' and hasattr(self, 'ollama_chat_model_combo'):
 
 
 

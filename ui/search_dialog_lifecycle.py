@@ -372,6 +372,22 @@ def initialize_search_dialog(dialog, parent=None):
 
 
 
+        QToolTip {{
+
+            background-color: {theme['panel_bg']};
+
+            color: {theme['text']};
+
+            border: 1px solid {theme['success_border']};
+
+            border-radius: 4px;
+
+            padding: 6px 8px;
+
+        }}
+
+
+
         """
 
 

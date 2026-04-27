@@ -231,6 +231,26 @@ class AnthropicStreamWorker(QThread):
 
             return f"Ollama (local) \u2014 {model}"
 
+        if provider in ("local_openai", "local_server"):
+            sc = config.get("search_config") or {}
+            model = (
+                sc.get("local_llm_model")
+                or config.get("local_llm_model")
+                or "local-model"
+            ).strip()
+            base_url = (
+                sc.get("local_llm_url")
+                or config.get("local_llm_url")
+                or config.get("api_url")
+                or ""
+            ).strip()
+            label = "Local Server (Ollama, LM Studio, Jan)"
+            if "11434" in base_url:
+                label = "Ollama (local)"
+            elif "1234" in base_url:
+                label = "LM Studio/Jan (local)"
+            return f"{label} \u2014 {model}"
+
 
 
         names = {
@@ -253,7 +273,7 @@ class AnthropicStreamWorker(QThread):
 
 
 
-            "custom": "Custom API",
+            "custom": "Custom / OpenAI-compatible",
 
 
 
@@ -1331,6 +1351,57 @@ class AnthropicStreamWorker(QThread):
 
 
 
+            relevant_note_ids = set(history_result.get('relevant_note_ids', []))
+
+
+
+            self._cited_note_ids = relevant_note_ids
+
+
+
+            self._cited_refs = {
+                idx + 1
+                for idx, note_id in enumerate(self._context_note_ids or [])
+                if note_id in relevant_note_ids
+            }
+
+
+
+            if answer and str(answer).strip():
+
+
+
+                log_debug(
+                    "Displaying cached answer "
+                    f"(answer length: {len(answer)}, cited notes: {len(relevant_note_ids)})"
+                )
+
+
+
+                self._display_answer_and_notes_after_rerank(answer, config, used_history, notes)
+
+
+
+                return
+
+
+
+            log_debug("Cached search result had an empty answer; showing matching notes only", is_error=True)
+
+
+
+            self.answer_box.setPlainText("Cached search result had no saved answer. Run a fresh search after clearing history.")
+
+
+
+            self.filter_and_display_notes()
+
+
+
+            return
+
+
+
         else:
 
 
@@ -1343,7 +1414,29 @@ class AnthropicStreamWorker(QThread):
 
 
 
-            max_context = max(5, min(50, search_config.get('max_results', 12)))
+            provider_for_context = config.get('provider', 'openai')
+
+
+
+            local_context_plan = self._local_context_usage_plan(
+                query, len(relevant_notes), provider_for_context, search_config
+            )
+
+
+
+            if local_context_plan:
+
+
+
+                max_context = max(3, min(local_context_plan['max_notes'], search_config.get('max_results', 12)))
+
+
+
+            else:
+
+
+
+                max_context = max(5, min(50, search_config.get('max_results', 12)))
 
 
 
@@ -1491,7 +1584,54 @@ class AnthropicStreamWorker(QThread):
 
 
 
-            context = "\n\n".join([_context_line(i, n) for i, n in enumerate(context_notes)])
+            context_lines = [_context_line(i, n) for i, n in enumerate(context_notes)]
+
+
+
+            if local_context_plan:
+
+
+
+                context_lines = self._fit_context_lines_to_token_budget(
+                    context_lines, local_context_plan['context_token_budget']
+                )
+
+
+
+                if len(context_lines) < len(context_notes):
+
+
+
+                    context_notes = context_notes[:len(context_lines)]
+
+
+
+                    context_note_ids = context_note_ids[:len(context_lines)]
+
+
+
+                    self._context_note_id_and_chunk = self._context_note_id_and_chunk[:len(context_lines)]
+
+
+
+                    if self._display_scored_notes:
+
+
+
+                        self._display_scored_notes = self._display_scored_notes[:len(context_lines)]
+
+
+
+                log_debug(
+                    "Local context plan: "
+                    f"{local_context_plan['mode']}, notes={len(context_notes)}, "
+                    f"context_tokens~{estimate_tokens(chr(10).join(context_lines))}, "
+                    f"answer_tokens={local_context_plan['max_output_tokens']}"
+                )
+
+
+
+            context = "\n\n".join(context_lines)
 
 
 
@@ -1551,7 +1691,7 @@ class AnthropicStreamWorker(QThread):
 
 
 
-            self._ask_ai_relevant_notes = relevant_notes
+            self._ask_ai_relevant_notes = context_notes
 
 
 
@@ -1902,6 +2042,7 @@ class AnthropicStreamWorker(QThread):
 
 
         ai_relevant_note_ids = set()
+        ai_relevant_refs = set()
 
 
 
@@ -1914,10 +2055,12 @@ class AnthropicStreamWorker(QThread):
 
 
                 ai_relevant_note_ids.add(relevant_notes[idx]['id'])
+                ai_relevant_refs.add(idx + 1)
 
 
 
         self._cited_note_ids = ai_relevant_note_ids
+        self._cited_refs = ai_relevant_refs
 
 
 
@@ -5430,6 +5573,89 @@ class AnthropicStreamWorker(QThread):
 
 
 
+    def _local_context_usage_plan(self, query, available_notes, provider, search_config):
+        """Choose a local-model context budget based on question complexity."""
+        if provider not in ("local_openai", "local_server", "ollama"):
+            return None
+
+        try:
+            n_ctx = int(search_config.get('local_llm_context_tokens') or 12288)
+        except Exception:
+            n_ctx = 12288
+        n_ctx = max(4096, min(n_ctx, 32768))
+
+        query_text = query or ""
+        query_tokens = estimate_tokens(query_text)
+        lower_query = query_text.lower()
+        complex_markers = (
+            'compare', 'differentiate', 'difference', 'mechanism', 'pathway',
+            'steps', 'sequence', 'algorithm', 'diagnosis', 'management',
+            'treatment', 'why', 'explain', 'list', 'table', 'vs', 'versus',
+            'all', 'causes', 'risk factors', 'complications'
+        )
+
+        complexity = 0
+        if query_tokens > 18:
+            complexity += 1
+        if query_tokens > 35:
+            complexity += 1
+        if any(marker in lower_query for marker in complex_markers):
+            complexity += 1
+        if available_notes > 12:
+            complexity += 1
+        if search_config.get('enable_hyde') or search_config.get('enable_query_expansion'):
+            complexity += 1
+
+        if complexity <= 1:
+            mode = "light"
+            max_output_tokens = min(1024, max(512, n_ctx // 6))
+            desired_context_tokens = min(2400, max(1200, n_ctx - max_output_tokens - 900))
+            max_notes = 8
+        elif complexity <= 3:
+            mode = "balanced"
+            max_output_tokens = min(2048, max(768, n_ctx // 5))
+            desired_context_tokens = min(5600, max(2200, n_ctx - max_output_tokens - 900))
+            max_notes = 16
+        else:
+            mode = "deep"
+            max_output_tokens = min(4096, max(1024, n_ctx // 4))
+            desired_context_tokens = min(10000, max(3500, n_ctx - max_output_tokens - 900))
+            max_notes = 32
+
+        return {
+            "mode": mode,
+            "model_context_tokens": n_ctx,
+            "context_token_budget": desired_context_tokens,
+            "max_output_tokens": max_output_tokens,
+            "max_notes": max_notes,
+        }
+
+
+
+    def _fit_context_lines_to_token_budget(self, context_lines, token_budget):
+        """Keep note blocks within a token budget while preserving note order."""
+        fitted = []
+        used = 0
+        token_budget = max(600, int(token_budget or 0))
+
+        for line in context_lines:
+            line_tokens = estimate_tokens(line)
+            remaining = token_budget - used
+            if remaining <= 120:
+                break
+            if line_tokens <= remaining:
+                fitted.append(line)
+                used += line_tokens
+                continue
+
+            keep_chars = max(240, remaining * 4)
+            fitted.append(line[:keep_chars].rstrip() + " ...")
+            break
+
+        return fitted or context_lines[:1]
+
+
+
     # --- Copied Answer Provider Calls ---
 
     def ask_ai(self, query, notes, context, config):
@@ -5650,8 +5876,20 @@ Rules:
 
 
 
+            local_context_plan = self._local_context_usage_plan(
+                query, len(notes), provider, sc
+            ) or {}
+
+
+
             answer, relevant_indices = self.call_custom(
-                prompt, "", local_model, api_url, notes, timeout_seconds=300
+                prompt,
+                "",
+                local_model,
+                api_url,
+                notes,
+                timeout_seconds=300,
+                max_tokens=local_context_plan.get('max_output_tokens', 4096),
             )
 
 
@@ -6204,7 +6442,7 @@ Rules:
 
 
 
-    def call_custom(self, prompt, api_key, model, api_url, notes, timeout_seconds=30):
+    def call_custom(self, prompt, api_key, model, api_url, notes, timeout_seconds=30, max_tokens=4096):
 
 
 
@@ -6236,7 +6474,7 @@ Rules:
 
 
 
-            "max_tokens": 4096
+            "max_tokens": max_tokens
 
 
 
@@ -6782,7 +7020,7 @@ Rules:
 
 
 
-        relevant_note_ids = [relevant_notes[idx]['id'] for idx in relevant_indices if 0 <= idx < len(relevant_notes)]
+        relevant_note_ids = [context_notes[idx]['id'] for idx in relevant_indices if 0 <= idx < len(context_notes)]
 
 
 
@@ -6803,6 +7041,7 @@ Rules:
 
 
         ai_relevant_note_ids = set()
+        ai_relevant_refs = set()
 
 
 
@@ -6810,15 +7049,17 @@ Rules:
 
 
 
-            if 0 <= idx < len(relevant_notes):
+            if 0 <= idx < len(context_notes):
 
 
 
-                ai_relevant_note_ids.add(relevant_notes[idx]['id'])
+                ai_relevant_note_ids.add(context_notes[idx]['id'])
+                ai_relevant_refs.add(idx + 1)
 
 
 
         self._cited_note_ids = ai_relevant_note_ids
+        self._cited_refs = ai_relevant_refs
 
 
 
@@ -8004,31 +8245,11 @@ Rules:
 
 
 
-        # Optionally restrict to notes cited in the AI answer ([1], [2], ...)
-
-
-
-        if getattr(self, 'show_only_cited_cb', None) and self.show_only_cited_cb.isChecked():
-
-
-
-            cited = getattr(self, '_cited_note_ids', None)
-
-
-
-            if cited:
-
-
-
-                filtered_notes = [(score, note) for score, note in filtered_notes if note['id'] in cited]
-
-
-
-
-
-
-
         # Filter by current relevance mode (Focused / Balanced / Broad) using precomputed flags; no extra search/API.
+
+
+
+        pre_mode_filtered_notes = list(filtered_notes)
 
 
 
@@ -8108,6 +8329,54 @@ Rules:
 
 
 
+        # Optionally restrict to the exact refs cited in the AI answer ([1], [2], ...).
+
+
+
+        if getattr(self, 'show_only_cited_cb', None) and self.show_only_cited_cb.isChecked():
+
+
+
+            cited = getattr(self, '_cited_note_ids', None) or set()
+
+
+
+            cited_refs = getattr(self, '_cited_refs', None) or set()
+
+
+
+            context_id_and_chunk = getattr(self, '_context_note_id_and_chunk', None) or []
+
+
+
+            cited_pairs = {
+                context_id_and_chunk[ref - 1]
+                for ref in cited_refs
+                if isinstance(ref, int) and 1 <= ref <= len(context_id_and_chunk)
+            }
+
+
+
+            if cited_pairs:
+
+
+
+                filtered_notes = [
+                    (score, note)
+                    for score, note in pre_mode_filtered_notes
+                    if (note['id'], note.get('chunk_index')) in cited_pairs
+                ]
+
+
+
+            elif cited:
+
+
+
+                filtered_notes = [(score, note) for score, note in pre_mode_filtered_notes if note['id'] in cited]
+
+
+
 
 
 
@@ -8137,6 +8406,7 @@ Rules:
 
 
         cited_ids = getattr(self, '_cited_note_ids', set()) or set()
+        cited_refs = getattr(self, '_cited_refs', set()) or set()
 
 
 
@@ -8252,7 +8522,11 @@ Rules:
 
 
 
-            if note['id'] in cited_ids:
+            is_cited_ref = order_num in cited_refs or note['id'] in cited_ids
+
+
+
+            if is_cited_ref:
 
 
 
@@ -8272,7 +8546,7 @@ Rules:
 
 
 
-            why_ref = "Cited in answer: Yes" if note['id'] in cited_ids else "Cited in answer: No"
+            why_ref = "Cited in answer: Yes" if is_cited_ref else "Cited in answer: No"
 
 
 
@@ -9505,6 +9779,7 @@ _AISEARCH_METHODS_FROM_WORKER = (
     '_on_relevance_rerank_done', '_display_answer_and_notes_after_rerank', '_on_relevance_rerank_done_stream', '_finish_anthropic_stream_display',
     '_on_ask_ai_success', '_on_ask_ai_error', '_on_ask_ai_worker_finished',
     '_rerank_with_cross_encoder', 'keyword_filter', 'keyword_filter_continue', 'get_best_model',
+    '_local_context_usage_plan', '_fit_context_lines_to_token_budget',
     'ask_ai', 'call_ollama', 'call_anthropic', 'call_openai', 'call_google', 'call_openrouter',
     'call_custom', '_openai_compatible_chat_url', 'make_request', 'parse_response', '_rerank_by_relevance_to_answer', 'filter_and_display_notes', '_get_matching_terms_for_note', 'update_selection_count',
     '_start_anthropic_stream', '_append_stream_chunk', '_on_anthropic_stream_done', '_on_anthropic_stream_error',

@@ -304,60 +304,6 @@ Logs and user data are stored under `user_files/` where possible. Logs redact se
 
 The add-on formats note display text separately from search text so HTML blocks and selected fields remain readable in previews and tooltips. Reopen the search dialog or rerun the search after updating.
 
-## Developer Map
-
-High-level modules:
-
-- `__init__.py`: add-on entry point and menu/bootstrap integration.
-- `llm.py`: answer provider calls.
-- `rerank_helper.py`: helper entry point for external re-ranking.
-
-Core:
-
-- `core/engine.py`: embedding providers, storage, note/deck queries, checkpoint migration, and embedding helper APIs.
-- `core/workers.py`: background workers for embedding search, indexing, keyword filtering, re-ranking, answer generation, and Anthropic streaming.
-- `core/keyword_scoring.py`: keyword extraction, stemming, stop words, TF-IDF scoring, and score aggregation.
-- `core/errors.py`: shared error classification helpers.
-- `core/compat.py`: runtime compatibility helpers.
-
-UI:
-
-- `ui/dialogs.py`: compatibility layer and `AISearchDialog` wrapper methods.
-- `ui/search_dialog_lifecycle.py`: search dialog construction/lifecycle.
-- `ui/search_dialog_ui.py`: search dialog layout and controls.
-- `ui/search_dialog_state.py`: history, scope banner, state, and settings launch helpers.
-- `ui/search_workflow.py`: search workflow, result display, filtering, selection, and callback logic.
-- `ui/search_workers.py`: UI-facing search worker helpers.
-- `ui/search_dialog.py`: custom table delegates for content and relevance bars.
-- `ui/settings_dialog.py`: Settings UI and persistence.
-- `ui/theme.py`: shared Anki-aware theme tokens and Settings stylesheet helpers.
-- `ui/widgets.py`: shared UI widgets, collapsible sections, sidebar, and field-row helpers.
-- `ui/note_content.py`: loading selected note fields and display/search text preparation.
-- `ui/query_enhancement.py`: query expansion, AI generic-term detection, HyDE, and relevance-mode helpers.
-- `ui/embedding_helpers.py`: dialog-facing embedding lookup and metadata helpers.
-- `ui/answer_prompts.py`: answer prompt construction.
-- `ui/answer_formatting.py`: answer HTML formatting and citation rendering.
-- `ui/answer_navigation.py`: citation navigation, browser opening, and clipboard helpers.
-- `ui/dependency_install.py`: dependency checks, install guidance, Visual C++ checks, and PyTorch repair guidance.
-- `ui/dialog_entrypoints.py`: public dialog open/close helpers.
-- `ui/sidebar_bootstrap.py`: side drawer bootstrap.
-
-Utils:
-
-- `utils/config.py`: default config, config load/save, embedding config normalization, validation.
-- `utils/paths.py`: profile-aware paths for embeddings and checkpoints.
-- `utils/text.py`: HTML cleanup, display text cleanup, cloze reveal, chunking, and regex helpers.
-- `utils/history.py`: search history persistence.
-- `utils/log.py`: redacted debug logging.
-- `utils/embeddings_status.py`: embedding status messages, stale index hints, and user-facing copy.
-
-## Data Files
-
-- `config.json`: user settings and API keys.
-- `user_files/`: embeddings database/cache, checkpoints, logs, and runtime user data.
-
-Do not publish `config.json` or `user_files/` with real personal data or API keys.
-
 ## License
 
 MIT

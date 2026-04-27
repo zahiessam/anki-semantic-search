@@ -49,7 +49,7 @@ def _selected_result_note_ids(self):
 
 
 def _highlight_result_notes(self, note_ids, scroll_to_note_id=None, scroll_to_ref=None):
-    """Highlight result rows without clearing the user's existing highlighted rows."""
+    """Highlight only the requested citation result rows."""
 
     if not hasattr(self, 'results_list') or not self.results_list.selectionModel():
         return
@@ -291,7 +291,7 @@ def _on_answer_link_clicked(self, url):
 
 
 
-        self._pinned_note_ids.add(note_id)
+        self._pinned_note_ids = {note_id}
 
 
 
@@ -343,8 +343,6 @@ def _on_answer_link_clicked(self, url):
 
 
 
-        highlighted_note_ids = _selected_result_note_ids(self)
-
         order = {nid: i for i, nid in enumerate(ctx)}
 
 
@@ -393,9 +391,8 @@ def _on_answer_link_clicked(self, url):
 
 
 
-        # Scroll to and highlight the note row, while preserving rows the user already highlighted.
-        highlighted_note_ids.add(note_id)
-        _highlight_result_notes(self, highlighted_note_ids, scroll_to_note_id=note_id, scroll_to_ref=num)
+        # Scroll to and highlight only the clicked citation row.
+        _highlight_result_notes(self, {note_id}, scroll_to_note_id=note_id, scroll_to_ref=num)
 
 
 

@@ -730,7 +730,10 @@ def setup_ui(self):
 
 
 
-    self.answer_source_label.setStyleSheet(f"font-size: 11px; color: {'#95a5a6' if is_dark else '#7f8c8d'}; font-style: italic; margin-top: 4px;")
+    self.answer_source_label.setStyleSheet(
+        f"font-size: 11px; color: {'#c2d2ca' if is_dark else '#586a61'}; "
+        "font-style: italic; margin-top: 4px; padding: 2px 4px;"
+    )
 
 
 
@@ -738,7 +741,7 @@ def setup_ui(self):
 
 
 
-    self.answer_source_label.setToolTip("Shows whether the answer came from an online API or a local model (Ollama).")
+    self.answer_source_label.setToolTip("Shows whether the answer came from a cloud API or a local model/server.")
 
 
 
@@ -1677,34 +1680,6 @@ def setup_ui(self):
 
 
 
-    close_btn = QPushButton("\u2716 Close")
-
-
-
-    close_btn.setObjectName("closeBtn")
-
-
-
-    close_btn.setMinimumHeight(32)
-
-
-
-    close_btn.setMinimumWidth(80)
-
-
-
-    close_btn.clicked.connect(self.close)
-
-
-
-    btn_layout.addWidget(close_btn)
-
-
-
-
-
-
-
     layout.addWidget(btn_container)
 
 
@@ -1914,6 +1889,7 @@ def setup_ui(self):
 
 
     self._cited_note_ids = set()   # note IDs cited in AI answer ([1], [2], ...) for "Show only cited" filter
+    self._cited_refs = set()       # 1-based refs cited in AI answer; preserves chunk-level citations
 
 
 

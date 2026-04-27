@@ -83,3 +83,13 @@ User config is stored in:
 
 - **File:** `config.json` in the add-on folder (e.g. `Anki2/addons21/AI_search/config.json`).
 - Config is merged with safe defaults on load; your changes persist in this file.
+
+### Local LLM context budgeting
+
+For local OpenAI-compatible servers such as LM Studio, set:
+
+```json
+"local_llm_context_tokens": 12288
+```
+
+inside `search_config` to match the model's loaded context length. The add-on uses this as an upper budget and automatically sends less context for simple questions and more context for complex, multi-note questions.

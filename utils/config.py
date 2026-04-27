@@ -51,6 +51,9 @@ DEFAULT_CONFIG = {
         "min_relevance_percent": 55,
         "max_results": 50,
         "context_chars_per_note": 0,
+        # Assumed local answer model context window. The add-on uses this to
+        # dynamically choose light/balanced/deep note context budgets.
+        "local_llm_context_tokens": 12288,
         "relevance_from_answer": True,
         "hybrid_embedding_weight": 40,
         "embedding_engine": "ollama",
@@ -155,7 +158,7 @@ def load_config():
         if not os.path.exists(config_path):
             log_debug(f"Config file does not exist: {config_path}, using defaults")
             return _deep_merge(DEFAULT_CONFIG, {})
-        with open(config_path, "r", encoding="utf-8") as f:
+        with open(config_path, "r", encoding="utf-8-sig") as f:
             file_config = json.load(f)
         merged = _deep_merge(DEFAULT_CONFIG, file_config)
         file_search_config = file_config.get("search_config") or {}
