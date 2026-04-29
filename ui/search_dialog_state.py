@@ -173,7 +173,7 @@ def _refresh_scope_banner(self):
 
 
 
-        txt = f"Searching: {n_types} note types, {n_fields} fields, {n_decks} decks \u2014 <a href='#settings' style='color:#3498db;'>Settings</a>"
+        txt = f"Searching: {n_types} note types, {n_fields} fields, {n_decks} decks"
 
 
 

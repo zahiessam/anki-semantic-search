@@ -1917,6 +1917,41 @@ class AnthropicStreamWorker(QThread):
 
             )
 
+        elif any(x in error_msg.lower() for x in ('winerror 10054', 'forcibly closed', 'connection reset', 'server closed the connection')):
+
+
+
+            if hasattr(self, 'answer_source_label'):
+
+
+
+                self.answer_source_label.setText("")
+
+
+
+            self.answer_box.setText(
+
+
+
+                "Local AI server closed the connection.\n\n"
+
+
+
+                "This is usually a local server/provider issue, not an API key or internet problem.\n\n"
+
+
+
+                "Check that the Server URL is an OpenAI-compatible base URL:\n"
+                "- Ollama: http://localhost:11434/v1\n"
+                "- LM Studio: http://localhost:1234/v1\n"
+                "- Jan: http://localhost:1337/v1\n\n"
+                "Also confirm the selected model is loaded/running and try a smaller or faster model if the provider keeps closing the request."
+
+
+
+            )
+
+
         elif any(x in error_msg.lower() for x in ('n_ctx', 'n_keep', 'context length', 'context_length', 'maximum context')):
 
 
@@ -6258,15 +6293,18 @@ Rules:
 
 
 
-            "Content-Type": "application/json",
-
-
-
-            "Authorization": f"Bearer {api_key}"
+            "Content-Type": "application/json"
 
 
 
         }
+
+
+        if api_key:
+
+
+
+            headers["Authorization"] = f"Bearer {api_key}"
 
 
 
@@ -6386,15 +6424,19 @@ Rules:
 
 
 
-            "Content-Type": "application/json",
-
-
-
-            "Authorization": f"Bearer {api_key}"
+            "Content-Type": "application/json"
 
 
 
         }
+
+
+
+        if api_key:
+
+
+
+            headers["Authorization"] = f"Bearer {api_key}"
 
 
 
@@ -6554,16 +6596,85 @@ Rules:
 
 
 
+        if "://" not in url:
+
+
+
+            url = "http://" + url
+
+
+
         url = url.rstrip("/")
 
 
 
-        if url.endswith("/chat/completions"):
+        lower_url = url.lower()
+
+
+
+        if lower_url.endswith("/chat/completions"):
 
 
 
             return url
 
+
+        if lower_url.endswith("/v1"):
+
+
+
+            return url + "/chat/completions"
+
+
+        for suffix in ("/api/chat", "/api/generate", "/api/tags"):
+
+
+
+            if lower_url.endswith(suffix):
+
+
+
+                return url[: -len(suffix)] + "/v1/chat/completions"
+
+
+        if lower_url.endswith("/v1/models"):
+
+
+
+            return url[:-7] + "/chat/completions"
+
+
+        if lower_url.endswith("/models"):
+
+
+
+            base = url[:-7]
+
+
+
+            if ":11434" in lower_url:
+
+
+
+                return base + "/v1/chat/completions"
+
+
+
+            return base + "/chat/completions"
+
+
+        if ":11434" in lower_url:
+
+
+
+            return url + "/v1/chat/completions"
+
+
+        if lower_url.endswith("/api"):
+
+
+
+            return url[:-4] + "/v1/chat/completions"
 
 
         return url + "/chat/completions"
@@ -6787,6 +6898,22 @@ Rules:
 
 
             log_debug(f"Unexpected error: {type(e).__name__}: {str(e)}")
+
+
+            lower = str(e).lower()
+
+
+
+            if "winerror 10054" in lower or "forcibly closed" in lower or "connection reset" in lower:
+
+
+
+                raise Exception(
+                    "Local AI server closed the connection. This usually means the server URL endpoint is wrong, "
+                    "the selected model crashed/unloaded, or the request exceeded what the provider can handle. "
+                    "For OpenAI-compatible local servers use a /v1 base URL such as http://localhost:11434/v1 "
+                    "for Ollama, http://localhost:1234/v1 for LM Studio, or http://localhost:1337/v1 for Jan."
+                )
 
 
 

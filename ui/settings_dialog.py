@@ -42,6 +42,7 @@ from ..core.engine import (
     get_notes_count_per_deck,
     get_notes_count_per_model,
     get_ollama_models,
+    _normalize_ollama_base_url,
     load_checkpoint,
     migrate_embeddings_json_to_db,
 )
@@ -766,7 +767,7 @@ class SettingsDialog(QDialog):
 
         self.local_llm_url = QLineEdit()
 
-        self.local_llm_url.setPlaceholderText("http://localhost:11434 (Ollama) or http://localhost:1234/v1 (LM Studio)")
+        self.local_llm_url.setPlaceholderText("http://localhost:11434/v1 (Ollama) or http://localhost:1234/v1 (LM Studio)")
 
         local_server_layout.addWidget(settings_field_row(theme, self.local_llm_url, "Server URL:"))
 
@@ -794,11 +795,11 @@ class SettingsDialog(QDialog):
 
 
 
-        self.local_server_test_btn = QPushButton("\U0001F50C Test Connection")
-
-        self.local_server_test_btn.setToolTip("Test connection to your local server. Shows latency and availability.")
-
-        self.local_server_test_btn.clicked.connect(self._test_local_server_connection)
+        self.local_server_test_btn = self._make_connection_test_button(
+            "\U0001F50C Test Connection",
+            "Test connection to your local answer server. Shows latency and availability.",
+            self._test_local_server_connection,
+        )
 
         local_server_layout.addWidget(settings_field_row(theme, self.local_server_test_btn))
 
@@ -806,7 +807,7 @@ class SettingsDialog(QDialog):
 
         local_guide = QLabel(
 
-            "- <b>Ollama:</b> http://localhost:11434<br>"
+            "- <b>Ollama:</b> http://localhost:11434/v1<br>"
 
             "- <b>LM Studio:</b> http://localhost:1234/v1<br>"
 
@@ -905,6 +906,24 @@ class SettingsDialog(QDialog):
 
         embedding_local_layout.addWidget(settings_field_row(theme, self.embedding_local_url_input, "Server URL:"))
 
+        embedding_model_row = QHBoxLayout()
+
+        self.embedding_local_model_input = QLineEdit()
+
+        self.embedding_local_model_input.setPlaceholderText("e.g. nomic-embed-text or text-embedding model")
+
+        embedding_model_row.addWidget(self.embedding_local_model_input)
+
+        self.embedding_local_autodetect_btn = QPushButton("Autodetect")
+
+        self.embedding_local_autodetect_btn.setToolTip("Find a running local server and select one of its embedding models.")
+
+        self.embedding_local_autodetect_btn.clicked.connect(self._autodetect_embedding_local_server)
+
+        embedding_model_row.addWidget(self.embedding_local_autodetect_btn)
+
+        embedding_local_layout.addWidget(settings_field_row(theme, layout=embedding_model_row, label="Model Name:"))
+
         embedding_local_hint = QLabel("Must expose an /embeddings endpoint")
 
         embedding_local_hint.setStyleSheet(settings_text_style(theme, "hint"))
@@ -930,6 +949,14 @@ class SettingsDialog(QDialog):
         embedding_independent_layout.addWidget(self.embedding_cloud_section)
 
         api_layout.addWidget(self.embedding_independent_section)
+
+        self.test_connection_btn = self._make_connection_test_button(
+            "Test Embedding Connection",
+            EmbeddingsTabMessages.TEST_CONNECTION_TOOLTIP,
+            self._test_embedding_connection,
+        )
+
+        api_layout.addWidget(settings_field_row(theme, self.test_connection_btn))
 
         self._connect_embedding_signals()
 
@@ -2438,7 +2465,7 @@ class SettingsDialog(QDialog):
 
         index_btns.addWidget(self.create_embedding_btn)
 
-        self.review_ineligible_btn = QPushButton("Review Ineligible Notes")
+        self.review_ineligible_btn = QPushButton("Review Excluded Notes")
 
         self.review_ineligible_btn.setToolTip("Open notes excluded from embeddings by the current deck, note type, and field filters.")
 
@@ -2447,18 +2474,6 @@ class SettingsDialog(QDialog):
         self.review_ineligible_btn.clicked.connect(self._review_ineligible_notes)
 
         index_btns.addWidget(self.review_ineligible_btn)
-
-
-
-        self.test_connection_btn = QPushButton("Test Connection")
-
-        self.test_connection_btn.setToolTip(EmbeddingsTabMessages.TEST_CONNECTION_TOOLTIP)
-
-        self.test_connection_btn.setStyleSheet(settings_button_style(theme, "muted"))
-
-        self.test_connection_btn.clicked.connect(self._test_embedding_connection)
-
-        index_btns.addWidget(self.test_connection_btn)
 
 
 
@@ -7072,6 +7087,7 @@ class SettingsDialog(QDialog):
             self.embedding_cloud_provider_combo,
             self.embedding_cloud_api_key_input,
             self.embedding_local_url_input,
+            self.embedding_local_model_input,
         ]
         for widget in widgets:
             widget.blockSignals(True)
@@ -7109,6 +7125,11 @@ class SettingsDialog(QDialog):
                 or sc.get("ollama_base_url")
                 or "http://localhost:11434/v1"
             )
+            self.embedding_local_model_input.setText(
+                sc.get("embedding_local_model")
+                or sc.get("ollama_embed_model")
+                or "nomic-embed-text"
+            )
         finally:
             for widget in widgets:
                 widget.blockSignals(False)
@@ -7121,17 +7142,20 @@ class SettingsDialog(QDialog):
         provider = self.embedding_cloud_provider_combo.currentData() or "Voyage AI"
         api_key = (self.embedding_cloud_api_key_input.text() or "").strip()
         local_url = (self.embedding_local_url_input.text() or "").strip()
+        local_model = (self.embedding_local_model_input.text() or "").strip()
         values = {
             "embedding_same_as_answer": same_provider,
             "embedding_strategy": strategy,
             "embedding_cloud_provider": provider,
             "embedding_cloud_api_key": api_key,
             "embedding_local_url": local_url,
+            "embedding_local_model": local_model,
         }
         if not same_provider:
             if strategy == "local":
                 values["embedding_engine"] = "local_openai"
                 values["local_llm_url"] = local_url or "http://localhost:11434/v1"
+                values["local_llm_model"] = local_model or "text-embedding-3-small"
             elif provider == "OpenAI":
                 values["embedding_engine"] = "openai"
                 values["openai_embedding_api_key"] = api_key
@@ -7391,6 +7415,8 @@ class SettingsDialog(QDialog):
 
                 'answer_cloud_provider': saved_cloud_provider,
 
+                'current_preset_name': current_config.get('current_preset_name'),
+
                 'styling': {
 
                     'question_font_size': self._safe_get_ui_value('question_font_spin', current_style.get('question_font_size', 13)),
@@ -7417,7 +7443,7 @@ class SettingsDialog(QDialog):
 
                 'search_config': {
 
-                    'local_llm_url': self._safe_get_ui_value('local_llm_url', current_sc.get('local_llm_url', 'http://localhost:11434')),
+                    'local_llm_url': self._safe_get_ui_value('local_llm_url', current_sc.get('local_llm_url', 'http://localhost:11434/v1')),
 
                     'local_llm_model': self._safe_get_ui_value('local_llm_model', current_sc.get('local_llm_model', 'llama3.2')),
 
@@ -7484,7 +7510,7 @@ class SettingsDialog(QDialog):
 
             # Preserve other config keys
 
-            for k in ['saved_presets']:
+            for k in ['saved_presets', 'current_preset_name']:
 
                 if k in current_config:
 
@@ -7672,7 +7698,7 @@ class SettingsDialog(QDialog):
 
             'embedding_same_checkbox', 'embedding_strategy_combo',
             'embedding_cloud_provider_combo', 'embedding_cloud_api_key_input',
-            'embedding_local_url_input', 'embedding_engine_combo',
+            'embedding_local_url_input', 'embedding_local_model_input', 'embedding_engine_combo',
             'ollama_chat_model_combo', 'ollama_embed_model_combo',
 
             'enable_query_expansion_cb', 'use_ai_generic_term_detection_cb'
@@ -7770,7 +7796,7 @@ class SettingsDialog(QDialog):
 
             if hasattr(self, 'local_llm_url') and not sip.isdeleted(self.local_llm_url):
 
-                self.local_llm_url.setText(sc.get('local_llm_url', 'http://localhost:11434'))
+                self.local_llm_url.setText(sc.get('local_llm_url', 'http://localhost:11434/v1'))
 
             if hasattr(self, 'local_llm_model') and not sip.isdeleted(self.local_llm_model):
 
@@ -7991,6 +8017,7 @@ class SettingsDialog(QDialog):
             if "11434" in url:
 
                 models = get_ollama_models(url)
+                url = _normalize_ollama_base_url(url) + "/v1"
 
             else:
 
@@ -8001,6 +8028,14 @@ class SettingsDialog(QDialog):
                 # Handle trailing slashes and /v1
 
                 base = url.rstrip('/')
+                if not base.startswith("http"):
+                    base = "http://" + base
+                if base.endswith("/chat/completions"):
+                    base = base[:-17]
+                if base.endswith("/models"):
+                    base = base[:-7]
+                if not base.endswith("/v1"):
+                    base = base + "/v1"
 
                 models_url = f"{base}/models"
 
@@ -8040,18 +8075,19 @@ class SettingsDialog(QDialog):
 
 
 
-    def _autodetect_local_server(self):
+    def _detect_local_servers(self):
 
-        """Find a running local AI server and populate URL/model fields."""
+        """Return running local AI servers and their available models."""
 
         import requests
-        from aqt.utils import chooseList, tooltip
 
         candidates = [
             ("Ollama", "http://localhost:11434", "ollama"),
             ("LM Studio", "http://localhost:1234/v1", "openai"),
             ("Jan", "http://localhost:1337/v1", "openai"),
         ]
+
+        detected = []
 
         errors = []
 
@@ -8087,35 +8123,95 @@ class SettingsDialog(QDialog):
 
                     continue
 
-                self.local_llm_url.setText(url)
-
-                if len(models) == 1:
-
-                    self.local_llm_model.setText(models[0])
-
-                else:
-
-                    idx = chooseList(f"{name} detected. Select a model:", models)
-
-                    self.local_llm_model.setText(models[idx] if idx >= 0 else models[0])
-
-                provider_idx = self.answer_provider_combo.findData("local_server")
-
-                if provider_idx >= 0:
-
-                    self.answer_provider_combo.setCurrentIndex(provider_idx)
-
-                if hasattr(self, "_on_answer_provider_changed"):
-
-                    self._on_answer_provider_changed()
-
-                tooltip(f"Detected {name}. Server and model fields updated.")
-
-                return
+                detected.append({
+                    "name": name,
+                    "url": _normalize_ollama_base_url(url) + "/v1" if kind == "ollama" else url,
+                    "kind": kind,
+                    "models": models,
+                })
 
             except Exception as exc:
 
                 errors.append(f"{name}: {exc}")
+
+        return detected, errors
+
+
+    def _choose_local_model(self, title, models, prefer_embedding=False):
+
+        from aqt.utils import chooseList
+
+        if not models:
+
+            return ""
+
+        if prefer_embedding:
+
+            preferred_terms = ("embed", "nomic", "bge", "e5", "jina", "gte", "minilm")
+
+            likely_models = [
+                model
+                for model in models
+                if any(term in model.lower() for term in preferred_terms)
+            ]
+
+            if len(likely_models) == 1:
+
+                return likely_models[0]
+
+            if len(likely_models) > 1:
+
+                ordered_models = likely_models + [model for model in models if model not in likely_models]
+
+                labels = [
+                    f"Recommended embedding model: {model}" if model in likely_models else model
+                    for model in ordered_models
+                ]
+
+                idx = chooseList(title, labels)
+
+                return ordered_models[idx] if idx >= 0 else likely_models[0]
+
+        if len(models) == 1:
+
+            return models[0]
+
+        idx = chooseList(title, models)
+
+        return models[idx] if idx >= 0 else models[0]
+
+
+    def _autodetect_local_server(self):
+
+        """Find a running local AI server and populate answer URL/model fields."""
+
+        from aqt.utils import tooltip
+
+        detected, errors = self._detect_local_servers()
+
+        for server in detected:
+
+            models = server["models"]
+
+            self.local_llm_url.setText(server["url"])
+
+            self.local_llm_model.setText(
+                self._choose_local_model(f"{server['name']} detected. Select a chat model:", models)
+            )
+
+            provider_idx = self.answer_provider_combo.findData("local_server")
+
+            if provider_idx >= 0:
+
+                self.answer_provider_combo.setCurrentIndex(provider_idx)
+
+            if hasattr(self, "_on_answer_provider_changed"):
+
+                self._on_answer_provider_changed()
+
+            tooltip(f"Detected {server['name']}. Server and model fields updated.")
+
+            return
 
         showInfo(
             "No running local AI server was detected.\n\n"
@@ -8123,6 +8219,87 @@ class SettingsDialog(QDialog):
             + "\n".join(errors[:3])
         )
 
+
+    def _autodetect_embedding_local_server(self):
+
+        """Find a running local AI server and populate embedding URL/model fields."""
+
+        from aqt.utils import tooltip
+
+        detected, errors = self._detect_local_servers()
+
+        for server in detected:
+
+            models = server["models"]
+
+            self.embedding_local_url_input.setText(server["url"])
+
+            self.embedding_local_model_input.setText(
+                self._choose_local_model(
+                    f"{server['name']} detected. Select an embedding model:",
+                    models,
+                    prefer_embedding=True,
+                )
+            )
+
+            strategy_idx = self.embedding_strategy_combo.findData("local")
+
+            if strategy_idx >= 0:
+
+                self.embedding_strategy_combo.setCurrentIndex(strategy_idx)
+
+            if hasattr(self, "_on_same_provider_toggled"):
+
+                self._on_same_provider_toggled()
+
+            tooltip(f"Detected {server['name']}. Embedding server and model fields updated.")
+
+            return
+
+        showInfo(
+            "No running local AI server was detected.\n\n"
+            "Start Ollama, LM Studio, or Jan, then click Autodetect again.\n\n"
+            + "\n".join(errors[:3])
+        )
+
+
+
+    def _make_connection_test_button(self, text, tooltip_text, callback):
+
+        """Create consistently themed test-connection buttons."""
+
+        button = QPushButton(text)
+
+        button.setToolTip(tooltip_text)
+
+        button.setStyleSheet(settings_button_style(_addon_theme(), "muted"))
+
+        button.clicked.connect(callback)
+
+        return button
+
+
+    def _show_connection_test_result(self, success, title, details="", status_label=None, status_text=None):
+
+        """Show a consistent connection-test result and optionally update a status label."""
+
+        prefix = "OK" if success else "Could not connect"
+
+        message = f"{prefix}: {title}"
+
+        if details:
+
+            message = f"{message}\n\n{details}"
+
+        if status_label is not None:
+
+            status_label.setText(status_text or message.splitlines()[0])
+
+            state = "success" if success else "error"
+
+            status_label.setStyleSheet(settings_status_label_style(_addon_theme(), state))
+
+        showInfo(message)
 
 
     def _test_local_server_connection(self):
@@ -8151,7 +8328,19 @@ class SettingsDialog(QDialog):
 
             # If it's Ollama, use its tags endpoint; otherwise try /models
 
-            test_url = f"{url.rstrip('/')}/api/tags" if "11434" in url else f"{url.rstrip('/')}/models"
+            if "11434" in url:
+                test_url = f"{_normalize_ollama_base_url(url)}/api/tags"
+            else:
+                base = url.rstrip("/")
+                if not base.startswith("http"):
+                    base = "http://" + base
+                if base.endswith("/chat/completions"):
+                    base = base[:-17]
+                if base.endswith("/models"):
+                    base = base[:-7]
+                if not base.endswith("/v1"):
+                    base = base + "/v1"
+                test_url = f"{base}/models"
             log_debug(f"Testing local server connection: {test_url}")
 
             resp = requests.get(test_url, timeout=5)
@@ -8162,15 +8351,27 @@ class SettingsDialog(QDialog):
 
             if resp.status_code == 200:
 
-                showInfo(f"OK: Connection successful.\n\nLatency: {elapsed:.0f}ms\nServer: {url}")
+                self._show_connection_test_result(
+                    success=True,
+                    title="Answer server connection OK",
+                    details=f"Latency: {elapsed:.0f} ms\nServer: {url}",
+                )
 
             else:
 
-                showInfo(f"Warning: Server responded with code {resp.status_code}.\nURL: {test_url}")
+                self._show_connection_test_result(
+                    success=False,
+                    title=f"Answer server responded with code {resp.status_code}",
+                    details=f"URL: {test_url}",
+                )
 
         except Exception as e:
 
-            showInfo(f"Error: Connection failed.\n\nError: {e}\n\nMake sure your server is running at {url}")
+            self._show_connection_test_result(
+                success=False,
+                title="Answer server connection failed",
+                details=f"Error: {e}\n\nMake sure your server is running at {url}",
+            )
 
 
 
@@ -8778,9 +8979,9 @@ class SettingsDialog(QDialog):
 
                     status_text = (
 
-                        "READY: Voyage AI (Cloud)\n\n"
+                        "Embedding provider ready: Voyage AI\n\n"
 
-                        "API key detected. Click 'Create/Update' below to index your notes."
+                        "API key detected. Create/update embeddings from Search & Embeddings."
 
                     )
 
@@ -8806,9 +9007,9 @@ class SettingsDialog(QDialog):
 
                     status_text = (
 
-                        f"READY: OpenAI (Cloud) - Model: {model}\n\n"
+                        f"Embedding provider ready: OpenAI - {model}\n\n"
 
-                        "Click 'Create/Update' to start embedding."
+                        "Create/update embeddings from Search & Embeddings."
 
                     )
 
@@ -8832,9 +9033,9 @@ class SettingsDialog(QDialog):
 
                     status_text = (
 
-                        "READY: Cohere (Cloud)\n\n"
+                        "Embedding provider ready: Cohere\n\n"
 
-                        "API key detected. Ready to create embeddings."
+                        "API key detected. Create/update embeddings from Search & Embeddings."
 
                     )
 
@@ -8849,7 +9050,7 @@ class SettingsDialog(QDialog):
                 self.embedding_status_label.setText(status_text)
                 theme = _addon_theme()
 
-                if "READY" in status_text or "CONNECTED" in status_text:
+                if "ready" in status_text.lower() or "CONNECTED" in status_text:
 
                     self.embedding_status_label.setStyleSheet(settings_status_label_style(theme, "success"))
 
@@ -10073,7 +10274,7 @@ if (-not $isAdmin) {{
 
 
 
-                    f"Please wait a few seconds and click '\U0001F50C Test Connection' to verify.\n\n"
+                    f"Please wait a few seconds and click 'Test Embedding Connection' to verify.\n\n"
 
 
 
@@ -10234,27 +10435,23 @@ if (-not $isAdmin) {{
 
 
 
-                showInfo(
-
-
-
-                    f"\u2705 Embedding connection OK \u2014 {engine_name}\n\n"
-
-
-
-                    f"Dimension: {dim} | Latency: {elapsed_ms} ms"
-
-
-
-                )
-
-
-
                 if hasattr(self, 'embedding_status_label') and self.embedding_status_label:
 
 
 
-                    self.embedding_status_label.setText(f"\u2705 {engine_name} OK ({elapsed_ms} ms)")
+                    status_label = self.embedding_status_label
+
+                else:
+
+                    status_label = None
+
+                self._show_connection_test_result(
+                    success=True,
+                    title=f"Embedding connection OK - {engine_name}",
+                    details=f"Dimension: {dim} | Latency: {elapsed_ms} ms",
+                    status_label=status_label,
+                    status_text=f"{engine_name} OK ({elapsed_ms} ms)",
+                )
 
 
 
@@ -10262,27 +10459,23 @@ if (-not $isAdmin) {{
 
 
 
-                showInfo(
-
-
-
-                    "\xe2\u0161\xa0\ufe0f Connection succeeded but received an empty embedding.\n\n"
-
-
-
-                    "Check your engine settings (URL/model or API key) and try again."
-
-
-
-                )
-
-
-
                 if hasattr(self, 'embedding_status_label') and self.embedding_status_label:
 
 
 
-                    self.embedding_status_label.setText("\xe2\u0161\xa0\ufe0f Empty embedding")
+                    status_label = self.embedding_status_label
+
+                else:
+
+                    status_label = None
+
+                self._show_connection_test_result(
+                    success=False,
+                    title="Embedding connection returned an empty embedding",
+                    details="Check your engine settings (URL/model or API key) and try again.",
+                    status_label=status_label,
+                    status_text="Empty embedding",
+                )
 
 
 
@@ -10294,7 +10487,11 @@ if (-not $isAdmin) {{
 
 
 
-                self.embedding_status_label.setText("\xe2\x9d\u0152 Test failed")
+                status_label = self.embedding_status_label
+
+            else:
+
+                status_label = None
 
 
 
@@ -10330,22 +10527,12 @@ if (-not $isAdmin) {{
 
 
 
-            showInfo(
-
-
-
-                f"\xe2\x9d\u0152 Embedding test failed!\n\n"
-
-
-
-                f"Error: {e}\n\n"
-
-
-
-                f"{hint}"
-
-
-
+            self._show_connection_test_result(
+                success=False,
+                title="Embedding connection failed",
+                details=f"Error: {e}\n\n{hint}",
+                status_label=status_label,
+                status_text="Test failed",
             )
 
 
@@ -11067,6 +11254,16 @@ if (-not $isAdmin) {{
 
 
 
+        detail_label = QLabel("Progress details will appear after the first batch...")
+
+        detail_label.setWordWrap(True)
+
+        detail_label.setStyleSheet(settings_text_style(_addon_theme(), "subtle"))
+
+        progress_layout.addWidget(detail_label)
+
+
+
 
 
 
@@ -11135,7 +11332,7 @@ if (-not $isAdmin) {{
 
 
 
-        close_button.setEnabled(False)
+        close_button.setVisible(False)
 
 
 
@@ -11168,6 +11365,10 @@ if (-not $isAdmin) {{
 
 
         progress_dialog._progress_bar = progress_bar
+
+
+
+        progress_dialog._detail_label = detail_label
 
 
 
@@ -11231,6 +11432,10 @@ if (-not $isAdmin) {{
 
 
 
+        worker.progress_detail.connect(lambda detail: self._on_embedding_progress_detail(progress_dialog, detail))
+
+
+
         worker.log_message.connect(log_text.append)
 
 
@@ -11279,6 +11484,30 @@ if (-not $isAdmin) {{
 
 
 
+    def _bring_browser_to_front(self, browser):
+
+
+        """Raise the Anki Browser after opening an audit result set."""
+
+
+        try:
+
+
+            if browser:
+
+
+                browser.activateWindow()
+
+
+                browser.raise_()
+
+
+        except Exception:
+
+
+            pass
+
+
     def _review_ineligible_notes(self):
 
 
@@ -11295,7 +11524,7 @@ if (-not $isAdmin) {{
 
 
             showInfo(
-                "All notes in the current deck/type scope are eligible for embeddings.\n\n"
+                "No excluded notes found in the current deck/type scope.\n\n"
                 f"Eligible notes: {audit.get('eligible_count', 0):,}"
             )
 
@@ -11305,12 +11534,12 @@ if (-not $isAdmin) {{
 
         reason_lines = [
             f"Eligible notes: {audit.get('eligible_count', 0):,}",
-            f"Ineligible notes: {len(ineligible):,}",
+            f"Excluded notes: {len(ineligible):,}",
             f"- Wrong note type: {audit.get('filtered_out_note_type_count', 0):,}",
             f"- No embedding fields selected: {audit.get('no_selected_fields_count', 0):,}",
             f"- Selected fields empty: {audit.get('empty_selected_fields_count', 0):,}",
             "",
-            "First ineligible notes:",
+            "First excluded notes:",
         ]
 
 
@@ -11364,25 +11593,25 @@ if (-not $isAdmin) {{
             QTimer.singleShot(150, lambda b=browser: self._bring_browser_to_front(b))
 
 
-            tooltip(f"Opened {len(note_ids)} ineligible notes in browser")
+            tooltip(f"Opened {len(note_ids)} excluded notes in browser")
 
 
         except Exception as exc:
 
 
-            log_debug(f"Could not open ineligible notes in browser: {exc}")
+            log_debug(f"Could not open excluded notes in browser: {exc}")
 
 
         reason_lines.extend([
             "",
-            f"Browser opened with first {len(browser_note_ids):,} ineligible notes.",
+            f"Browser opened with first {len(browser_note_ids):,} excluded notes.",
             "",
             "Browser query:",
             search_query,
         ])
 
 
-        showText("\n".join(reason_lines), title="Ineligible Notes Audit")
+        showText("\n".join(reason_lines), title="Excluded Notes Audit")
 
 
     def _toggle_pause(self, progress_dialog, pause_button, log_text):
@@ -11453,6 +11682,38 @@ if (-not $isAdmin) {{
 
 
 
+    def _on_embedding_progress_detail(self, progress_dialog, detail):
+
+
+
+        detail_label = getattr(progress_dialog, '_detail_label', None)
+
+        progress_bar = getattr(progress_dialog, '_progress_bar', None)
+
+        log_text = getattr(progress_dialog, '_log_text', None)
+
+        if not isinstance(detail, dict):
+
+            return
+
+        checked = int(detail.get("checked") or 0)
+
+        total = int(detail.get("total") or 0)
+
+        batch_size = int(detail.get("batch_size") or 0)
+
+        eta = detail.get("eta") or "calculating..."
+
+        if progress_bar is not None and total:
+
+            progress_bar.setFormat(f"{checked:,}/{total:,} (%p%)")
+
+        if detail_label is not None:
+
+            detail_label.setText(f"Batch {batch_size:,} notes/call | ETA {eta}")
+
+
+
     def _on_embedding_finished(self, progress_dialog, processed, errors, skipped, still_failed_count, note_count):
 
 
@@ -11490,6 +11751,12 @@ if (-not $isAdmin) {{
 
 
         close_button = progress_dialog._close_button
+
+        pause_button = getattr(progress_dialog, '_pause_button', None)
+
+        if pause_button is not None:
+
+            pause_button.setVisible(False)
 
 
 
@@ -11555,6 +11822,8 @@ if (-not $isAdmin) {{
 
 
 
+        close_button.setVisible(True)
+
         close_button.setEnabled(True)
 
 
@@ -11602,6 +11871,12 @@ if (-not $isAdmin) {{
 
         close_button = progress_dialog._close_button
 
+        pause_button = getattr(progress_dialog, '_pause_button', None)
+
+        if pause_button is not None:
+
+            pause_button.setVisible(False)
+
 
 
 
@@ -11615,6 +11890,8 @@ if (-not $isAdmin) {{
         log_text.append(f"\u274c Error: {error_msg}")
 
 
+
+        close_button.setVisible(True)
 
         close_button.setEnabled(True)
 

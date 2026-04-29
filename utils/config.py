@@ -91,6 +91,7 @@ DEFAULT_CONFIG = {
         "embedding_cloud_provider": "Voyage AI",
         "embedding_cloud_api_key": "",
         "embedding_local_url": "",
+        "embedding_local_model": "nomic-embed-text",
     },
     "saved_presets": {},
     "current_preset_name": None,
@@ -201,7 +202,7 @@ def _embedding_config_from_answer_provider(config, sc):
     answer_key = (config.get("api_key") or "").strip()
     effective = dict(sc)
 
-    if provider in ("ollama",):
+    if provider == "ollama":
         effective["embedding_engine"] = "ollama"
         effective["ollama_base_url"] = (
             sc.get("ollama_base_url")
@@ -209,7 +210,8 @@ def _embedding_config_from_answer_provider(config, sc):
             or "http://localhost:11434"
         )
         effective["ollama_embed_model"] = (
-            sc.get("ollama_embed_model")
+            sc.get("embedding_local_model")
+            or sc.get("ollama_embed_model")
             or sc.get("ollama_chat_model")
             or sc.get("local_llm_model")
             or "nomic-embed-text"
@@ -219,12 +221,13 @@ def _embedding_config_from_answer_provider(config, sc):
     if provider in ("local_openai", "local_server"):
         effective["embedding_engine"] = "local_openai"
         effective["local_llm_url"] = (
-            sc.get("local_llm_url")
-            or sc.get("embedding_local_url")
+            sc.get("embedding_local_url")
+            or sc.get("local_llm_url")
             or "http://localhost:1234/v1"
         )
         effective["local_llm_model"] = (
-            sc.get("local_llm_model")
+            sc.get("embedding_local_model")
+            or sc.get("local_llm_model")
             or sc.get("ollama_embed_model")
             or "text-embedding-3-small"
         )
@@ -243,7 +246,7 @@ def _embedding_config_from_answer_provider(config, sc):
 
 
 # explanation: returns the correct embedding provider config
-# based on whether the user chose "same as answer" or independent
+# based on whether the user chose "same as answer" or independent.
 def get_effective_embedding_config(config: dict) -> dict:
     config = dict(config or {})
     sc = dict(config.get("search_config") or {})
@@ -262,7 +265,8 @@ def get_effective_embedding_config(config: dict) -> dict:
                 or "http://localhost:11434/v1"
             )
             effective_sc["local_llm_model"] = (
-                sc.get("local_llm_model")
+                sc.get("embedding_local_model")
+                or sc.get("local_llm_model")
                 or sc.get("ollama_embed_model")
                 or "text-embedding-3-small"
             )

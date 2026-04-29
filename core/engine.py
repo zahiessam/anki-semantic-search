@@ -193,9 +193,22 @@ def get_embeddings_via_cohere_batch(texts, input_type="document", api_key=None, 
 
 # --- Ollama Embeddings ---
 
+def _normalize_ollama_base_url(base_url="http://localhost:11434"):
+    url = (base_url or "http://localhost:11434").strip()
+    if "://" not in url:
+        url = "http://" + url
+    url = url.rstrip("/")
+    for suffix in ("/v1", "/api", "/api/tags", "/api/embed", "/api/chat", "/api/generate"):
+        if url.lower().endswith(suffix):
+            url = url[: -len(suffix)]
+            break
+    return url.rstrip("/")
+
+
 def get_ollama_models(base_url="http://localhost:11434"):
     try:
-        data = _request_json(f"{base_url.rstrip('/')}/api/tags", timeout=10)
+        base_url = _normalize_ollama_base_url(base_url)
+        data = _request_json(f"{base_url}/api/tags", timeout=10)
         models = data.get("models") or []
         names = []
         for item in models:
@@ -210,8 +223,9 @@ def get_ollama_models(base_url="http://localhost:11434"):
 
 
 def get_embedding_via_ollama(text, base_url="http://localhost:11434", model="nomic-embed-text"):
+    base_url = _normalize_ollama_base_url(base_url)
     data = _request_json(
-        f"{base_url.rstrip('/')}/api/embed",
+        f"{base_url}/api/embed",
         payload={"model": model, "input": text},
         headers={"Content-Type": "application/json"},
         timeout=90,
@@ -223,6 +237,7 @@ def get_embedding_via_ollama(text, base_url="http://localhost:11434", model="nom
 def get_embeddings_via_ollama_batch(texts, base_url="http://localhost:11434", model="nomic-embed-text"):
     if not texts:
         return []
+    base_url = _normalize_ollama_base_url(base_url)
     out = []
     for start in range(0, len(texts), OLLAMA_EMBED_CHUNK_SIZE):
         chunk = texts[start : start + OLLAMA_EMBED_CHUNK_SIZE]

@@ -113,7 +113,7 @@ class EmbeddingsTabMessages:
 
     # Status label: whether embeddings exist, coverage, last run
     NO_EMBEDDINGS = (
-        "No embeddings yet. Use 'Test Connection' to verify setup, "
+        "No embeddings yet. Use 'Test Embedding Connection' in API Settings to verify setup, "
         "then run 'Create/Update Embeddings' to index your notes."
     )
     COVERAGE_TEMPLATE = (

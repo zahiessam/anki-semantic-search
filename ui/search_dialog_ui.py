@@ -190,19 +190,7 @@ def setup_ui(self):
 
 
 
-    self.scope_banner.setToolTip("Search scope. Click Settings to change note types, fields, decks.")
-
-
-
-    self.scope_banner.setTextFormat(Qt.TextFormat.RichText)
-
-
-
-    self.scope_banner.setOpenExternalLinks(False)
-
-
-
-    self.scope_banner.linkActivated.connect(lambda _: self.open_settings())
+    self.scope_banner.setToolTip("Search scope. Use the Settings button to change note types, fields, decks.")
 
 
 
@@ -738,10 +726,6 @@ def setup_ui(self):
 
 
     self.answer_source_label.setWordWrap(True)
-
-
-
-    self.answer_source_label.setToolTip("Shows whether the answer came from a cloud API or a local model/server.")
 
 
 
