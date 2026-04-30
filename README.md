@@ -304,6 +304,16 @@ Logs and user data are stored under `user_files/` where possible. Logs redact se
 
 The add-on formats note display text separately from search text so HTML blocks and selected fields remain readable in previews and tooltips. Reopen the search dialog or rerun the search after updating.
 
+## Screenshots
+
+![Search window 1](https://raw.githubusercontent.com/zahiessam/anki-semantic-search/main/screenshots/search-window-1.png)
+
+![Search window 2](https://raw.githubusercontent.com/zahiessam/anki-semantic-search/main/screenshots/search-window-2.png)
+
+![Settings window 1](https://raw.githubusercontent.com/zahiessam/anki-semantic-search/main/screenshots/setting-window-1.png)
+
+![Settings window 2](https://raw.githubusercontent.com/zahiessam/anki-semantic-search/main/screenshots/setting-window-2.png)
+
 ## License
 
 MIT
