@@ -801,7 +801,7 @@ def setup_ui(self):
 
 
 
-    self.toggle_select_btn = QPushButton("\u2713 Select All")
+    self.toggle_select_btn = QPushButton("Select All")
 
 
 
@@ -809,7 +809,7 @@ def setup_ui(self):
 
 
 
-    self.toggle_select_btn.setMaximumWidth(95)
+    self.toggle_select_btn.setMinimumWidth(110)
 
 
 

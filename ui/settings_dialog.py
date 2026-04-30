@@ -7154,8 +7154,6 @@ class SettingsDialog(QDialog):
         if not same_provider:
             if strategy == "local":
                 values["embedding_engine"] = "local_openai"
-                values["local_llm_url"] = local_url or "http://localhost:11434/v1"
-                values["local_llm_model"] = local_model or "text-embedding-3-small"
             elif provider == "OpenAI":
                 values["embedding_engine"] = "openai"
                 values["openai_embedding_api_key"] = api_key

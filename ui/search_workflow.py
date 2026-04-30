@@ -9327,7 +9327,7 @@ Rules:
 
 
 
-                self.toggle_select_btn.setText("\xe2\u0153\u2014 Deselect All")
+                self.toggle_select_btn.setText("Deselect All")
 
 
 
@@ -9335,7 +9335,7 @@ Rules:
 
 
 
-                self.toggle_select_btn.setText("\u2713 Select All")
+                self.toggle_select_btn.setText("Select All")
 
 
 
