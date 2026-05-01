@@ -54,6 +54,9 @@ DEFAULT_CONFIG = {
         # Assumed local answer model context window. The add-on uses this to
         # dynamically choose light/balanced/deep note context budgets.
         "local_llm_context_tokens": 12288,
+        # Dedicated local answer model. Kept separate from local embedding
+        # model so independent embedding settings cannot overwrite answers.
+        "answer_local_model": "",
         "relevance_from_answer": True,
         "hybrid_embedding_weight": 40,
         "embedding_engine": "ollama",
@@ -80,6 +83,13 @@ DEFAULT_CONFIG = {
         "extra_stop_words": [],
         # Optional verbose debug logging for search internals (query analysis, scores)
         "verbose_search_debug": False,
+        # Retrieval V2 is opt-in. "legacy" preserves the historical ranking path.
+        "retrieval_version": "legacy",
+        "keyword_scoring_method": "bm25",
+        "enable_mmr_diversity": True,
+        "mmr_lambda": 0.75,
+        "mmr_candidate_pool": 50,
+        "mmr_similarity_method": "token_jaccard",
         # Optional extra synonym groups for query expansion (no UI). Each group is a list of
         # equivalent terms; if any term in the group appears in the query, the rest are appended.
         # Example: [["warfarin", "coumadin"], ["vitamin k", "phytonadione"]]
@@ -161,12 +171,17 @@ def load_config():
             return _deep_merge(DEFAULT_CONFIG, {})
         with open(config_path, "r", encoding="utf-8-sig") as f:
             file_config = json.load(f)
+        for typo in ("retrieval_versoin", "retrival_version"):
+            if typo in file_config:
+                log_debug(f"Retrieval config warning: ignoring top-level key {typo!r}; put 'retrieval_version' inside search_config")
         merged = _deep_merge(DEFAULT_CONFIG, file_config)
         file_search_config = file_config.get("search_config") or {}
         search_config = dict(merged.get("search_config") or {})
         mode = (search_config.get("relevance_mode") or "").strip().lower()
         if "relevance_mode" not in file_search_config:
             search_config["relevance_mode"] = "balanced"
+        _protect_answer_model_from_embedding_migration(search_config)
+        normalize_retrieval_config(search_config, log_warnings=True)
         merged["search_config"] = search_config
         log_debug(f"Config loaded from file (merged with defaults)")
         return merged
@@ -175,11 +190,148 @@ def load_config():
         return _deep_merge(DEFAULT_CONFIG, {})
 
 
+def _looks_like_embedding_model(model):
+    value = (model or "").strip().lower()
+    if not value:
+        return False
+    embedding_markers = (
+        "embed",
+        "embedding",
+        "bge-",
+        "e5-",
+        "nomic-embed",
+        "medembed",
+        "minilm",
+    )
+    return any(marker in value for marker in embedding_markers)
+
+
+def _protect_answer_model_from_embedding_migration(search_config):
+    """Keep legacy local_llm_model from masquerading as the answer model.
+
+    Older code used local_llm_model as the runtime field for local OpenAI-compatible
+    embeddings. If independent local embeddings were selected, that could leave the
+    embedding model in the answer model field after restart.
+    """
+    if not isinstance(search_config, dict):
+        return
+    if search_config.get("answer_local_model"):
+        return
+    if search_config.get("embedding_same_as_answer", True):
+        return
+    if (search_config.get("embedding_strategy") or "").strip().lower() != "local":
+        return
+
+    answer_model = (search_config.get("local_llm_model") or "").strip()
+    embedding_model = (search_config.get("embedding_local_model") or "").strip()
+    if answer_model and answer_model == embedding_model and _looks_like_embedding_model(answer_model):
+        search_config["local_llm_model"] = ""
+
+
 def get_config_value(config, key, default):
     """Get config value with default fallback."""
     if not config:
         return default
     return config.get(key, default)
+
+
+# ============================================================================
+# Retrieval V2 Configuration
+# ============================================================================
+
+def _coerce_bool(value, default, key, warnings):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("true", "1", "yes", "on"):
+            return True
+        if lowered in ("false", "0", "no", "off"):
+            return False
+    warnings.append(f"{key} must be true/false; using {default!r}")
+    return default
+
+
+def _coerce_float(value, default, min_value, max_value, key, warnings):
+    try:
+        out = float(value)
+    except Exception:
+        warnings.append(f"{key} must be a number; using {default!r}")
+        return default
+    clamped = max(min_value, min(max_value, out))
+    if clamped != out:
+        warnings.append(f"{key}={out!r} outside {min_value}..{max_value}; clamped to {clamped!r}")
+    return clamped
+
+
+def _coerce_int(value, default, min_value, max_value, key, warnings):
+    try:
+        out = int(value)
+    except Exception:
+        warnings.append(f"{key} must be an integer; using {default!r}")
+        return default
+    clamped = max(min_value, min(max_value, out))
+    if clamped != out:
+        warnings.append(f"{key}={out!r} outside {min_value}..{max_value}; clamped to {clamped!r}")
+    return clamped
+
+
+def normalize_retrieval_config(search_config, log_warnings=False):
+    """Validate retrieval knobs and return a normalized copy.
+
+    Invalid values intentionally fall back to legacy-safe behavior so a typo in
+    config.json cannot break searching during study.
+    """
+    sc = dict(search_config or {})
+    warnings = []
+
+    for typo in ("retrieval_versoin", "retrival_version"):
+        if typo in sc:
+            warnings.append(f"Ignoring unknown retrieval config key {typo!r}; did you mean 'retrieval_version'?")
+
+    version = (sc.get("retrieval_version") or "legacy").strip().lower()
+    if version not in ("legacy", "v2"):
+        warnings.append(f"retrieval_version={version!r} is invalid; using 'legacy'")
+        version = "legacy"
+    sc["retrieval_version"] = version
+
+    scorer = (sc.get("keyword_scoring_method") or ("bm25" if version == "v2" else "tfidf")).strip().lower()
+    if scorer not in ("bm25", "tfidf"):
+        warnings.append(f"keyword_scoring_method={scorer!r} is invalid; using {'bm25' if version == 'v2' else 'tfidf'!r}")
+        scorer = "bm25" if version == "v2" else "tfidf"
+    if version != "v2":
+        scorer = "tfidf"
+    sc["keyword_scoring_method"] = scorer
+
+    sc["enable_mmr_diversity"] = _coerce_bool(
+        sc.get("enable_mmr_diversity", True), True, "enable_mmr_diversity", warnings
+    )
+    sc["mmr_lambda"] = _coerce_float(sc.get("mmr_lambda", 0.75), 0.75, 0.0, 1.0, "mmr_lambda", warnings)
+    sc["mmr_candidate_pool"] = _coerce_int(
+        sc.get("mmr_candidate_pool", 50), 50, 5, 200, "mmr_candidate_pool", warnings
+    )
+    method = (sc.get("mmr_similarity_method") or "token_jaccard").strip().lower()
+    if method != "token_jaccard":
+        warnings.append(f"mmr_similarity_method={method!r} is invalid; using 'token_jaccard'")
+        method = "token_jaccard"
+    sc["mmr_similarity_method"] = method
+
+    if log_warnings:
+        for warning in warnings:
+            log_debug(f"Retrieval config warning: {warning}")
+    return sc
+
+
+def get_retrieval_config(config_or_search_config):
+    """Return normalized retrieval config from full config or search_config."""
+    source = config_or_search_config or {}
+    if isinstance(source, dict) and "search_config" in source:
+        source = source.get("search_config") or {}
+    return normalize_retrieval_config(source, log_warnings=False)
+
+
+def is_retrieval_v2(config_or_search_config):
+    return get_retrieval_config(config_or_search_config).get("retrieval_version") == "v2"
 
 
 # ============================================================================

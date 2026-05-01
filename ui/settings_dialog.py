@@ -53,6 +53,7 @@ from ..utils import (
     format_partial_failure_progress,
     get_effective_embedding_config,
     get_embeddings_storage_path_for_read,
+    get_retrieval_config,
     load_config,
     log_debug,
     save_config,
@@ -2564,6 +2565,9 @@ class SettingsDialog(QDialog):
         accuracy_layout.addWidget(self.hybrid_weight_row)
 
         self.relevance_from_answer_cb = QCheckBox("Relevance from answer (Rerank by AI output)")
+        self.relevance_from_answer_cb.setToolTip(
+            "Sort displayed notes by similarity to the generated answer. Does not choose the notes sent to the AI."
+        )
 
         accuracy_layout.addWidget(settings_field_row(theme, self.relevance_from_answer_cb))
 
@@ -2572,8 +2576,70 @@ class SettingsDialog(QDialog):
         search_layout.addWidget(accuracy_section)
 
 
+        # --- 5. RETRIEVAL ENGINE ---
 
-        # --- 5. RE-RANKING SECTION ---
+        retrieval_section = CollapsibleSection("Retrieval Engine (Advanced)", is_expanded=False)
+        retrieval_layout = QVBoxLayout()
+        retrieval_layout.setContentsMargins(0, 0, 0, 0)
+        retrieval_layout.setSpacing(8)
+
+        self.retrieval_version_combo = QComboBox()
+        self.retrieval_version_combo.addItem("Legacy", "legacy")
+        self.retrieval_version_combo.addItem("V2", "v2")
+        self.retrieval_version_combo.setToolTip("Legacy keeps the previous retrieval behavior. V2 enables BM25 and optional MMR diversity.")
+        retrieval_layout.addWidget(settings_field_row(theme, self.retrieval_version_combo, "Retrieval version:"))
+
+        self.keyword_scoring_combo = QComboBox()
+        self.keyword_scoring_combo.addItem("TF-IDF", "tfidf")
+        self.keyword_scoring_combo.addItem("BM25", "bm25")
+        self.keyword_scoring_combo.setToolTip("Keyword scoring method used by Retrieval V2.")
+        retrieval_layout.addWidget(settings_field_row(theme, self.keyword_scoring_combo, "Keyword scoring:"))
+
+        self.mmr_enabled_cb = QCheckBox("Diversity filter")
+        self.mmr_enabled_cb.setToolTip("Reduce near-duplicate notes in Retrieval V2 using Maximal Marginal Relevance.")
+        retrieval_layout.addWidget(settings_field_row(theme, self.mmr_enabled_cb))
+
+        self.mmr_subcontrols_widget = QWidget()
+        mmr_subcontrols_layout = QVBoxLayout(self.mmr_subcontrols_widget)
+        mmr_subcontrols_layout.setContentsMargins(24, 0, 0, 0)
+        mmr_subcontrols_layout.setSpacing(8)
+
+        mmr_strength_row = QHBoxLayout()
+        self.mmr_lambda_slider = QSlider(Qt.Orientation.Horizontal)
+        self.mmr_lambda_slider.setRange(0, 100)
+        self.mmr_lambda_slider.setSingleStep(5)
+        self.mmr_lambda_slider.setPageStep(10)
+        self.mmr_lambda_slider.setToolTip("Higher = more relevant results. Lower = more varied results.")
+        self.mmr_lambda_value_label = QLabel("75%")
+        self.mmr_lambda_value_label.setMinimumWidth(42)
+        self.mmr_lambda_value_label.setStyleSheet(settings_text_style(theme, "subtle"))
+        mmr_strength_row.addWidget(self.mmr_lambda_slider)
+        mmr_strength_row.addWidget(self.mmr_lambda_value_label)
+        mmr_subcontrols_layout.addWidget(settings_field_row(theme, layout=mmr_strength_row, label="Diversity strength:"))
+
+        self.mmr_candidate_pool_spin = QSpinBox()
+        self.mmr_candidate_pool_spin.setRange(5, 200)
+        self.mmr_candidate_pool_spin.setToolTip("Max notes considered for diversity. Fewer results? Pool adjusts automatically.")
+        mmr_subcontrols_layout.addWidget(settings_field_row(theme, self.mmr_candidate_pool_spin, "Candidate pool:"))
+
+        retrieval_layout.addWidget(self.mmr_subcontrols_widget)
+
+        self.retrieval_dirty_label = QLabel("Changes apply to next search")
+        self.retrieval_dirty_label.setStyleSheet(settings_text_style(theme, "subtle"))
+        self.retrieval_dirty_label.hide()
+        retrieval_layout.addWidget(settings_field_row(theme, self.retrieval_dirty_label))
+
+        retrieval_section.addLayout(retrieval_layout)
+        search_layout.addWidget(retrieval_section)
+
+        self.retrieval_version_combo.currentIndexChanged.connect(lambda *_: self._update_retrieval_v2_controls(mark_dirty=True))
+        self.keyword_scoring_combo.currentIndexChanged.connect(lambda *_: self._update_retrieval_v2_controls(mark_dirty=True))
+        self.mmr_enabled_cb.stateChanged.connect(lambda *_: self._update_retrieval_v2_controls(mark_dirty=True))
+        self.mmr_lambda_slider.valueChanged.connect(lambda *_: self._update_retrieval_v2_controls(mark_dirty=True))
+        self.mmr_candidate_pool_spin.valueChanged.connect(lambda *_: self._update_retrieval_v2_controls(mark_dirty=True))
+
+
+        # --- 6. RE-RANKING SECTION ---
 
         rerank_section = CollapsibleSection("Re-Ranking (Advanced Accuracy)", is_expanded=False)
 
@@ -3139,7 +3205,12 @@ class SettingsDialog(QDialog):
 
         self.local_llm_url.setText(config.get('local_llm_url', 'http://localhost:1234/v1'))
 
-        self.local_llm_model.setText(config.get('local_llm_model', 'model-identifier'))
+        sc = config.get('search_config') or {}
+        self.local_llm_model.setText(
+            sc.get('answer_local_model')
+            or sc.get('local_llm_model')
+            or config.get('local_llm_model', 'model-identifier')
+        )
 
 
 
@@ -3365,6 +3436,81 @@ class SettingsDialog(QDialog):
         except Exception:
 
             pass
+
+        try:
+
+            retrieval = get_retrieval_config(search_config)
+            retrieval_widgets = [
+                "retrieval_version_combo",
+                "keyword_scoring_combo",
+                "mmr_enabled_cb",
+                "mmr_lambda_slider",
+                "mmr_candidate_pool_spin",
+            ]
+
+            for name in retrieval_widgets:
+
+                w = getattr(self, name, None)
+
+                if w is not None:
+
+                    w.blockSignals(True)
+
+            if hasattr(self, "retrieval_version_combo"):
+
+                idx = self.retrieval_version_combo.findData(retrieval.get('retrieval_version', 'legacy'))
+
+                if idx >= 0:
+
+                    self.retrieval_version_combo.setCurrentIndex(idx)
+
+            if hasattr(self, "keyword_scoring_combo"):
+
+                idx = self.keyword_scoring_combo.findData(retrieval.get('keyword_scoring_method', 'bm25'))
+
+                if idx >= 0:
+
+                    self.keyword_scoring_combo.setCurrentIndex(idx)
+
+            if hasattr(self, "mmr_enabled_cb"):
+
+                self.mmr_enabled_cb.setChecked(bool(retrieval.get('enable_mmr_diversity', True)))
+
+            if hasattr(self, "mmr_lambda_slider"):
+
+                self.mmr_lambda_slider.setValue(max(0, min(100, int(round(float(retrieval.get('mmr_lambda', 0.75)) * 100)))))
+
+            if hasattr(self, "mmr_candidate_pool_spin"):
+
+                self.mmr_candidate_pool_spin.setValue(max(5, min(200, int(retrieval.get('mmr_candidate_pool', 50)))))
+
+            if hasattr(self, "_update_retrieval_v2_controls"):
+
+                self._update_retrieval_v2_controls(mark_dirty=False)
+
+            if hasattr(self, "retrieval_dirty_label"):
+
+                self.retrieval_dirty_label.hide()
+
+        except Exception as e:
+
+            log_debug(f"Error loading Retrieval V2 settings: {e}", is_error=True)
+
+        finally:
+
+            for name in [
+                "retrieval_version_combo",
+                "keyword_scoring_combo",
+                "mmr_enabled_cb",
+                "mmr_lambda_slider",
+                "mmr_candidate_pool_spin",
+            ]:
+
+                w = getattr(self, name, None)
+
+                if w is not None:
+
+                    w.blockSignals(False)
 
 
 
@@ -7173,8 +7319,10 @@ class SettingsDialog(QDialog):
         if answer_with == "local_server":
             current_provider = (config.get("provider") or "").strip().lower()
             config["provider"] = current_provider if current_provider in ("ollama", "local_openai") else "local_openai"
+            answer_model = (self.local_llm_model.text() or "").strip()
             sc["local_llm_url"] = (self.local_llm_url.text() or "http://localhost:1234/v1").strip()
-            sc["local_llm_model"] = (self.local_llm_model.text() or "text-embedding-3-small").strip()
+            sc["answer_local_model"] = answer_model
+            sc["local_llm_model"] = answer_model or (sc.get("local_llm_model") or "").strip()
         else:
             api_key = (self.api_key_input.text() or "").strip()
             config["api_key"] = api_key
@@ -7443,7 +7591,15 @@ class SettingsDialog(QDialog):
 
                     'local_llm_url': self._safe_get_ui_value('local_llm_url', current_sc.get('local_llm_url', 'http://localhost:11434/v1')),
 
-                    'local_llm_model': self._safe_get_ui_value('local_llm_model', current_sc.get('local_llm_model', 'llama3.2')),
+                    'answer_local_model': self._safe_get_ui_value(
+                        'local_llm_model',
+                        current_sc.get('answer_local_model') or current_sc.get('local_llm_model', 'llama3.2')
+                    ),
+
+                    'local_llm_model': self._safe_get_ui_value(
+                        'local_llm_model',
+                        current_sc.get('answer_local_model') or current_sc.get('local_llm_model', 'llama3.2')
+                    ),
 
                     'search_method': self._safe_get_ui_value('search_method_combo', current_sc.get('search_method', 'hybrid')),
 
@@ -7495,6 +7651,18 @@ class SettingsDialog(QDialog):
 
                     'rerank_python_path': self._safe_get_ui_value('rerank_python_path_input', current_sc.get('rerank_python_path', None)),
 
+                    'retrieval_version': self._safe_get_ui_value('retrieval_version_combo', current_sc.get('retrieval_version', 'legacy')),
+
+                    'keyword_scoring_method': self._safe_get_ui_value('keyword_scoring_combo', current_sc.get('keyword_scoring_method', 'bm25')),
+
+                    'enable_mmr_diversity': self._safe_get_ui_value('mmr_enabled_cb', current_sc.get('enable_mmr_diversity', True)),
+
+                    'mmr_lambda': max(0, min(100, int(self._safe_get_ui_value('mmr_lambda_slider', int(float(current_sc.get('mmr_lambda', 0.75)) * 100))))) / 100.0,
+
+                    'mmr_candidate_pool': max(5, min(200, int(self._safe_get_ui_value('mmr_candidate_pool_spin', current_sc.get('mmr_candidate_pool', 50))))),
+
+                    'mmr_similarity_method': 'token_jaccard',
+
                 }
 
             }
@@ -7523,6 +7691,10 @@ class SettingsDialog(QDialog):
 
 
             if save_config(config):
+
+                if hasattr(self, "retrieval_dirty_label"):
+
+                    self.retrieval_dirty_label.hide()
 
                 showInfo("Settings saved successfully!")
 
@@ -7699,7 +7871,11 @@ class SettingsDialog(QDialog):
             'embedding_local_url_input', 'embedding_local_model_input', 'embedding_engine_combo',
             'ollama_chat_model_combo', 'ollama_embed_model_combo',
 
-            'enable_query_expansion_cb', 'use_ai_generic_term_detection_cb'
+            'enable_query_expansion_cb', 'use_ai_generic_term_detection_cb',
+
+            'retrieval_version_combo', 'keyword_scoring_combo', 'mmr_enabled_cb',
+
+            'mmr_lambda_slider', 'mmr_candidate_pool_spin'
 
         ]
 
@@ -7755,6 +7931,44 @@ class SettingsDialog(QDialog):
 
                 self.min_relevance_spin.setValue(sc.get('min_relevance_percent', 55))
 
+            retrieval = get_retrieval_config(sc)
+
+            if hasattr(self, 'retrieval_version_combo') and not sip.isdeleted(self.retrieval_version_combo):
+
+                idx = self.retrieval_version_combo.findData(retrieval.get('retrieval_version', 'legacy'))
+
+                if idx >= 0:
+
+                    self.retrieval_version_combo.setCurrentIndex(idx)
+
+            if hasattr(self, 'keyword_scoring_combo') and not sip.isdeleted(self.keyword_scoring_combo):
+
+                idx = self.keyword_scoring_combo.findData(retrieval.get('keyword_scoring_method', 'bm25'))
+
+                if idx >= 0:
+
+                    self.keyword_scoring_combo.setCurrentIndex(idx)
+
+            if hasattr(self, 'mmr_enabled_cb') and not sip.isdeleted(self.mmr_enabled_cb):
+
+                self.mmr_enabled_cb.setChecked(bool(retrieval.get('enable_mmr_diversity', True)))
+
+            if hasattr(self, 'mmr_lambda_slider') and not sip.isdeleted(self.mmr_lambda_slider):
+
+                self.mmr_lambda_slider.setValue(max(0, min(100, int(round(float(retrieval.get('mmr_lambda', 0.75)) * 100)))))
+
+            if hasattr(self, 'mmr_candidate_pool_spin') and not sip.isdeleted(self.mmr_candidate_pool_spin):
+
+                self.mmr_candidate_pool_spin.setValue(max(5, min(200, int(retrieval.get('mmr_candidate_pool', 50)))))
+
+            if hasattr(self, '_update_retrieval_v2_controls'):
+
+                self._update_retrieval_v2_controls(mark_dirty=False)
+
+            if hasattr(self, 'retrieval_dirty_label') and not sip.isdeleted(self.retrieval_dirty_label):
+
+                self.retrieval_dirty_label.hide()
+
 
 
             # 2. Answer Provider & Local Server
@@ -7798,7 +8012,7 @@ class SettingsDialog(QDialog):
 
             if hasattr(self, 'local_llm_model') and not sip.isdeleted(self.local_llm_model):
 
-                self.local_llm_model.setText(sc.get('local_llm_model', 'llama3.2'))
+                self.local_llm_model.setText(sc.get('answer_local_model') or sc.get('local_llm_model', 'llama3.2'))
 
 
 
@@ -7944,6 +8158,10 @@ class SettingsDialog(QDialog):
         if hasattr(self, '_on_embedding_engine_changed'): self._on_embedding_engine_changed()
 
         if hasattr(self, '_on_search_method_changed'): self._on_search_method_changed()
+
+        if hasattr(self, '_update_retrieval_v2_controls'): self._update_retrieval_v2_controls(mark_dirty=False)
+
+        if hasattr(self, 'retrieval_dirty_label'): self.retrieval_dirty_label.hide()
 
 
 
@@ -8897,6 +9115,39 @@ class SettingsDialog(QDialog):
 
 
 
+    def _update_retrieval_v2_controls(self, mark_dirty=False):
+
+        """Enable Retrieval V2 controls and show dirty status only after user changes."""
+
+        if not hasattr(self, "retrieval_version_combo"):
+
+            return
+
+        is_v2 = (self.retrieval_version_combo.currentData() or "legacy") == "v2"
+
+        mmr_on = bool(getattr(self, "mmr_enabled_cb", None) and self.mmr_enabled_cb.isChecked())
+
+        self.keyword_scoring_combo.setEnabled(is_v2)
+
+        self.mmr_enabled_cb.setEnabled(is_v2)
+
+        self.mmr_lambda_slider.setEnabled(is_v2 and mmr_on)
+
+        self.mmr_candidate_pool_spin.setEnabled(is_v2 and mmr_on)
+
+        self.mmr_subcontrols_widget.setEnabled(is_v2 and mmr_on)
+
+        if hasattr(self, "mmr_lambda_value_label"):
+
+            self.mmr_lambda_value_label.setText(f"{self.mmr_lambda_slider.value()}%")
+
+            self.mmr_lambda_value_label.setEnabled(is_v2 and mmr_on)
+
+        if mark_dirty and hasattr(self, "retrieval_dirty_label"):
+
+            self.retrieval_dirty_label.show()
+
+
     def _refresh_embedding_status(self):
 
         """Check and display embedding status for the currently selected engine in the UI."""
@@ -8932,18 +9183,32 @@ class SettingsDialog(QDialog):
 
             if engine in ('local_openai', 'ollama'):
 
-                base_url = (
-                    effective_sc.get("ollama_base_url")
-                    or effective_sc.get("local_llm_url")
-                    or effective_sc.get("embedding_local_url")
-                    or 'http://localhost:11434/v1'
-                )
+                if engine == "ollama":
+                    base_url = (
+                        effective_sc.get("ollama_base_url")
+                        or effective_sc.get("local_llm_url")
+                        or effective_sc.get("embedding_local_url")
+                        or 'http://localhost:11434'
+                    )
 
-                model = (
-                    effective_sc.get("ollama_embed_model")
-                    or effective_sc.get("local_llm_model")
-                    or 'text-embedding-3-small'
-                )
+                    model = (
+                        effective_sc.get("ollama_embed_model")
+                        or effective_sc.get("local_llm_model")
+                        or 'nomic-embed-text'
+                    )
+                else:
+                    base_url = (
+                        effective_sc.get("local_llm_url")
+                        or effective_sc.get("embedding_local_url")
+                        or effective_sc.get("ollama_base_url")
+                        or 'http://localhost:1234/v1'
+                    )
+
+                    model = (
+                        effective_sc.get("local_llm_model")
+                        or effective_sc.get("embedding_local_model")
+                        or 'text-embedding-3-small'
+                    )
 
                 status_text = (
 
@@ -10385,6 +10650,15 @@ if (-not $isAdmin) {{
 
         engine = sc.get("embedding_engine") or "voyage"
 
+        resolved_url = ""
+        resolved_model = ""
+        if engine == "ollama":
+            resolved_url = (sc.get("ollama_base_url") or "http://localhost:11434").strip()
+            resolved_model = (sc.get("ollama_embed_model") or "nomic-embed-text").strip()
+        elif engine == "local_openai":
+            resolved_url = (sc.get("local_llm_url") or "http://localhost:1234/v1").strip()
+            resolved_model = (sc.get("local_llm_model") or "text-embedding-3-small").strip()
+
         config = effective_config
 
 
@@ -10448,7 +10722,13 @@ if (-not $isAdmin) {{
                     title=f"Embedding connection OK - {engine_name}",
                     details=f"Dimension: {dim} | Latency: {elapsed_ms} ms",
                     status_label=status_label,
-                    status_text=f"{engine_name} OK ({elapsed_ms} ms)",
+                    status_text=(
+                        f"{engine_name} OK ({elapsed_ms} ms)\n\n"
+                        f"URL: {resolved_url}\n"
+                        f"Model: {resolved_model}"
+                        if resolved_model
+                        else f"{engine_name} OK ({elapsed_ms} ms)"
+                    ),
                 )
 
 
@@ -11438,11 +11718,11 @@ if (-not $isAdmin) {{
 
 
 
-        worker.finished_signal.connect(lambda processed, errors, skipped, still_failed: self._on_embedding_finished(
+        worker.finished_signal.connect(lambda processed, errors, skipped, refreshed, still_failed: self._on_embedding_finished(
 
 
 
-            progress_dialog, processed, errors, skipped, still_failed, note_count
+            progress_dialog, processed, errors, skipped, refreshed, still_failed, note_count
 
 
 
@@ -11712,7 +11992,7 @@ if (-not $isAdmin) {{
 
 
 
-    def _on_embedding_finished(self, progress_dialog, processed, errors, skipped, still_failed_count, note_count):
+    def _on_embedding_finished(self, progress_dialog, processed, errors, skipped, refreshed, still_failed_count, note_count):
 
 
 
@@ -11763,7 +12043,7 @@ if (-not $isAdmin) {{
 
 
         status_label.setText(
-            f"\u2705 Completed! New embeddings: {processed:,}, already present: {skipped:,} ({errors} errors)"
+            f"\u2705 Completed! New embeddings: {processed:,}, refreshed: {refreshed:,}, already present: {skipped:,} ({errors} errors)"
         )
 
 
@@ -11773,6 +12053,10 @@ if (-not $isAdmin) {{
 
 
         log_text.append(f"New embeddings created: {processed:,} notes")
+
+        if refreshed > 0:
+
+            log_text.append(f"Existing embeddings refreshed: {refreshed:,} notes")
 
 
 
@@ -11829,6 +12113,7 @@ if (-not $isAdmin) {{
         message = (
             "Embedding generation complete!\n"
             f"New embeddings created: {processed:,} notes\n"
+            f"Existing embeddings refreshed: {refreshed:,} notes\n"
             f"Already present: {skipped:,} notes\n"
             f"Errors: {errors}"
         )

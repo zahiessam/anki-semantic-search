@@ -29,11 +29,13 @@ from .search_workers import (
     RerankWorker,
     _do_rerank,
 )
+from ..core.keyword_scoring import get_extended_stop_words
 from ..core.engine import estimate_tokens, get_embedding_for_query, get_embeddings_batch
 from ..core.errors import _is_embedding_dimension_mismatch
 from ..utils import (
     format_dimension_mismatch_hint,
     get_embeddings_db_path,
+    get_retrieval_config,
     load_config,
     load_search_history,
     log_debug,
@@ -234,7 +236,8 @@ class AnthropicStreamWorker(QThread):
         if provider in ("local_openai", "local_server"):
             sc = config.get("search_config") or {}
             model = (
-                sc.get("local_llm_model")
+                sc.get("answer_local_model")
+                or sc.get("local_llm_model")
                 or config.get("local_llm_model")
                 or "local-model"
             ).strip()
@@ -975,6 +978,88 @@ class AnthropicStreamWorker(QThread):
 
     # --- Copied Search Continuation Flow ---
 
+    def _mmr_token_set(self, note, stop_words, common_tokens):
+        text = (note.get('display_content') or note.get('content') or '').lower()
+        tokens = re.findall(r"\b\w+\b", text)
+        meaningful = []
+        for token in tokens:
+            if len(token) <= 2 or token in stop_words or token in common_tokens:
+                continue
+            meaningful.append(token)
+            if len(meaningful) >= 200:
+                break
+        return set(meaningful)
+
+
+    def _apply_mmr_diversity(self, scored_notes, retrieval, config):
+        """Apply dependency-free MMR in Retrieval V2.
+
+        mmr_candidate_pool is an upper bound only: actual pool size is
+        min(configured_pool, len(candidates)).
+        """
+        self._mmr_applied = False
+        if not scored_notes or not retrieval.get("enable_mmr_diversity", True):
+            return scored_notes
+
+        pool_size = min(int(retrieval.get("mmr_candidate_pool", 50) or 50), len(scored_notes))
+        if pool_size <= 2:
+            return scored_notes
+
+        search_config = (config or {}).get("search_config") or {}
+        verbose = bool(search_config.get("verbose_search_debug"))
+        if verbose:
+            log_debug(
+                f"MMR diversity: pool_size=min({retrieval.get('mmr_candidate_pool')}, {len(scored_notes)})={pool_size}"
+            )
+
+        pool = list(scored_notes[:pool_size])
+        rest = list(scored_notes[pool_size:])
+        max_score = max((score for score, _ in pool), default=1.0) or 1.0
+        lambda_value = float(retrieval.get("mmr_lambda", 0.75))
+
+        stop_words = get_extended_stop_words(search_config)
+        token_docs = []
+        token_df = {}
+        for _, note in pool:
+            text = (note.get('display_content') or note.get('content') or '').lower()
+            token_set = {
+                token
+                for token in re.findall(r"\b\w+\b", text)
+                if len(token) > 2 and token not in stop_words
+            }
+            token_docs.append(token_set)
+            for token in token_set:
+                token_df[token] = token_df.get(token, 0) + 1
+
+        common_cutoff = max(1, int(0.6 * len(pool)))
+        common_tokens = {token for token, count in token_df.items() if count > common_cutoff}
+        token_sets = [self._mmr_token_set(note, stop_words, common_tokens) for _, note in pool]
+
+        selected_indices = [0]
+        remaining = set(range(1, len(pool)))
+
+        def jaccard(a, b):
+            if not a or not b:
+                return 0.0
+            return len(a & b) / max(1, len(a | b))
+
+        while remaining:
+            best_idx = None
+            best_score = None
+            for idx in remaining:
+                relevance = max(0.0, pool[idx][0]) / max_score
+                redundancy = max(jaccard(token_sets[idx], token_sets[sel]) for sel in selected_indices)
+                mmr_score = lambda_value * relevance - (1.0 - lambda_value) * redundancy
+                if best_score is None or mmr_score > best_score:
+                    best_score = mmr_score
+                    best_idx = idx
+            selected_indices.append(best_idx)
+            remaining.remove(best_idx)
+
+        self._mmr_applied = True
+        return [pool[idx] for idx in selected_indices] + rest
+
+
     def _perform_search_continue(self, notes, scored_notes, effective_method, total_above_threshold):
 
 
@@ -992,6 +1077,20 @@ class AnthropicStreamWorker(QThread):
 
 
         log_debug(f"Filtered to {len(scored_notes)} potentially relevant notes (method: {effective_method}, total above threshold: {total_above_threshold})")
+
+        retrieval = get_retrieval_config(config)
+        if retrieval.get("retrieval_version") == "v2":
+            for score, note in scored_notes:
+                note['_retrieval_score'] = score
+            scored_notes = self._apply_mmr_diversity(scored_notes, retrieval, config)
+            if scored_notes and getattr(self, '_mmr_applied', False):
+                self._scored_notes_for_context = None
+            if (config.get("search_config") or {}).get("verbose_search_debug"):
+                log_debug(
+                    "Retrieval V2 active: "
+                    f"scorer={retrieval.get('keyword_scoring_method')}, "
+                    f"candidates={len(scored_notes)}"
+                )
 
 
 
@@ -2164,6 +2263,8 @@ class AnthropicStreamWorker(QThread):
 
 
         search_config = config.get('search_config') or {}
+        retrieval = get_retrieval_config(config)
+        retrieval_v2 = retrieval.get("retrieval_version") == "v2"
 
 
 
@@ -2194,6 +2295,16 @@ class AnthropicStreamWorker(QThread):
                 note_texts.append((text[:2000]) if text else "")
 
 
+
+            if retrieval_v2 and not answer_text:
+                log_debug("Relevance-from-answer skipped: empty answer")
+                self._display_answer_and_notes_after_rerank(answer, config, used_history, notes)
+                return
+
+            if retrieval_v2 and len(note_texts) < 3:
+                log_debug("Relevance-from-answer skipped: fewer than 3 notes")
+                self._display_answer_and_notes_after_rerank(answer, config, used_history, notes)
+                return
 
             if answer_text and note_texts:
 
@@ -2233,6 +2344,11 @@ class AnthropicStreamWorker(QThread):
 
                 return
 
+
+            if retrieval_v2:
+                log_debug("Relevance-from-answer skipped: no answer/note text for worker")
+                self._display_answer_and_notes_after_rerank(answer, config, used_history, notes)
+                return
 
 
             try:
@@ -2412,6 +2528,8 @@ class AnthropicStreamWorker(QThread):
 
 
         log_debug("=== Perform Search Called ===")
+        import time
+        self._retrieval_search_started = time.time()
 
 
 
@@ -2614,6 +2732,14 @@ class AnthropicStreamWorker(QThread):
 
 
             search_config = config.get('search_config', {})
+            retrieval = get_retrieval_config(config)
+            if search_config.get("verbose_search_debug"):
+                log_debug(
+                    "Retrieval diagnostics: "
+                    f"version={retrieval.get('retrieval_version')}, "
+                    f"scorer={retrieval.get('keyword_scoring_method')}, "
+                    f"mmr_enabled={retrieval.get('enable_mmr_diversity')}"
+                )
 
 
 
@@ -2646,6 +2772,7 @@ class AnthropicStreamWorker(QThread):
 
 
             log_debug("Starting to load notes in background...")
+            self._note_load_started = time.time()
 
 
 
@@ -2786,6 +2913,12 @@ class AnthropicStreamWorker(QThread):
 
 
         notes, fields_description, cache_key = payload
+
+        config = getattr(self, '_search_pending_config', None) or load_config()
+        if (config.get("search_config") or {}).get("verbose_search_debug"):
+            started = getattr(self, '_note_load_started', None)
+            elapsed = (time.time() - started) if started else 0
+            log_debug(f"Retrieval diagnostics: note_load_seconds={elapsed:.3f}, loaded_rows={len(notes)}")
 
 
 
@@ -3545,7 +3678,10 @@ class AnthropicStreamWorker(QThread):
 
 
 
+        import time
         import re
+        combine_started = time.time()
+        keyword_started = time.time()
 
 
 
@@ -3695,6 +3831,13 @@ class AnthropicStreamWorker(QThread):
 
 
         tfidf_scores = self._compute_tfidf_scores(notes, keywords)
+        if search_config.get("verbose_search_debug", False):
+            log_debug(
+                "Retrieval diagnostics: "
+                f"keyword_scoring_seconds={time.time() - keyword_started:.3f}, "
+                f"keyword_scorer={getattr(self, '_query_keyword_scoring_method', 'tfidf')}, "
+                f"notes={len(notes)}, keywords={len(keywords)}, phrases={len(phrases)}"
+            )
 
 
 
@@ -4717,6 +4860,13 @@ class AnthropicStreamWorker(QThread):
 
 
         total_above_threshold = sum(1 for x in scored_notes if x[0] >= min_relevance)
+        if search_config.get("verbose_search_debug", False):
+            log_debug(
+                "Retrieval diagnostics: "
+                f"combine_seconds={time.time() - combine_started:.3f}, "
+                f"embedding_candidates={len(embedding_results or [])}, "
+                f"final_candidates={len(scored_notes)}, method={effective_method}"
+            )
 
 
 
@@ -5899,7 +6049,8 @@ Rules:
 
 
             local_model = (
-                sc.get('local_llm_model')
+                sc.get('answer_local_model')
+                or sc.get('local_llm_model')
                 or config.get('local_llm_model')
                 or model
                 or 'local-model'
@@ -7231,6 +7382,8 @@ Rules:
 
 
         search_config = config.get('search_config') or {}
+        retrieval = get_retrieval_config(config)
+        retrieval_v2 = retrieval.get("retrieval_version") == "v2"
 
 
 
@@ -7261,6 +7414,16 @@ Rules:
                 note_texts.append((text[:2000]) if text else "")
 
 
+
+            if retrieval_v2 and not answer_text:
+                log_debug("Relevance-from-answer skipped: empty answer")
+                self._finish_anthropic_stream_display(answer, config)
+                return
+
+            if retrieval_v2 and len(note_texts) < 3:
+                log_debug("Relevance-from-answer skipped: fewer than 3 notes")
+                self._finish_anthropic_stream_display(answer, config)
+                return
 
             if answer_text and note_texts:
 
@@ -7300,6 +7463,11 @@ Rules:
 
                 return
 
+
+            if retrieval_v2:
+                log_debug("Relevance-from-answer skipped: no answer/note text for worker")
+                self._finish_anthropic_stream_display(answer, config)
+                return
 
 
             try:
@@ -9903,6 +10071,7 @@ _AISEARCH_METHODS_FROM_WORKER = (
     '_start_estimated_progress_timer', '_stop_estimated_progress_timer', '_hide_busy_progress', '_on_embedding_search_finished',
     '_on_keyword_filter_continue_done', '_on_embedding_search_error', '_on_rerank_done', '_on_get_notes_done', '_on_keyword_filter_done',
     '_perform_search_continue', 'perform_search',
+    '_mmr_token_set', '_apply_mmr_diversity',
     '_on_relevance_rerank_done', '_display_answer_and_notes_after_rerank', '_on_relevance_rerank_done_stream', '_finish_anthropic_stream_display',
     '_on_ask_ai_success', '_on_ask_ai_error', '_on_ask_ai_worker_finished',
     '_rerank_with_cross_encoder', 'keyword_filter', 'keyword_filter_continue', 'get_best_model',

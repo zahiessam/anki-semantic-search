@@ -13,6 +13,7 @@ from aqt.qt import QThread, pyqtSignal
 from ..core.compat import _ensure_stderr_patched, _patch_colorama_early
 from ..core.engine import get_embedding_for_query, get_embeddings_batch, load_embedding
 from ..core.errors import _is_embedding_dimension_mismatch
+from ..utils.config import get_retrieval_config
 from ..utils.log import log_debug
 from ..utils.text import semantic_chunk_text
 
@@ -20,6 +21,16 @@ from ..utils.text import semantic_chunk_text
 # ============================================================================
 # Search Worker Compatibility And Standalone Search Helpers
 # ============================================================================
+
+def _embedding_search_backend_sqlite_scan(embedding_query, notes, config, db_path=None):
+    """Embedding-search boundary for future FAISS/sqlite-vec backends.
+
+    Current default remains the existing SQLite blob scan plus Python cosine
+    scoring. Future vector stores should implement this same return shape:
+    list[(score, note)] sorted descending, or None on unavailable embeddings.
+    """
+    return _run_embedding_search_sync(embedding_query, notes, config, db_path=db_path)
+
 
 def _run_embedding_search_sync(embedding_query, notes, config, db_path=None):
 
@@ -1445,6 +1456,19 @@ class RelevanceRerankWorker(QThread):
 
             import numpy as np
 
+            retrieval = get_retrieval_config(self.config)
+            retrieval_v2 = retrieval.get("retrieval_version") == "v2"
+
+            if retrieval_v2 and len(self.all_scored_notes) < 3:
+                log_debug("Relevance-from-answer skipped: fewer than 3 notes")
+                self.finished_signal.emit(None)
+                return
+
+            if retrieval_v2 and not (self.answer_text or "").strip():
+                log_debug("Relevance-from-answer skipped: empty answer")
+                self.finished_signal.emit(None)
+                return
+
 
 
             self.progress_signal.emit(5, "Re-ranking by relevance... (embedding answer)")
@@ -1457,6 +1481,8 @@ class RelevanceRerankWorker(QThread):
 
             if not answer_emb:
 
+                if retrieval_v2:
+                    log_debug("Relevance-from-answer skipped: answer embedding failed")
 
 
                 self.finished_signal.emit(None)
@@ -1477,6 +1503,8 @@ class RelevanceRerankWorker(QThread):
 
             if not note_embs or len(note_embs) != len(self.all_scored_notes):
 
+                if retrieval_v2:
+                    log_debug("Relevance-from-answer skipped: note embedding failed or count mismatch")
 
 
                 self.finished_signal.emit(None)
@@ -1509,6 +1537,11 @@ class RelevanceRerankWorker(QThread):
 
                 ne = np.array(note_embs[i], dtype=float)
 
+                if retrieval_v2 and len(ne) != len(answer_vec):
+                    log_debug("Relevance-from-answer skipped: embedding dimensions mismatch")
+                    self.finished_signal.emit(None)
+                    return
+
 
 
                 norm_n = max(np.linalg.norm(ne), 1e-9)
@@ -1525,9 +1558,20 @@ class RelevanceRerankWorker(QThread):
 
                 note['_display_relevance'] = pct
 
+                if retrieval_v2:
+                    note['_answer_relevance_score'] = pct
+
 
 
                 new_scores.append((float(pct), note))
+
+            if retrieval_v2 and len(new_scores) >= 3:
+                normalized = np.array([score / 100.0 for score, _ in new_scores], dtype=float)
+                std = float(np.std(normalized))
+                if std < 0.01:
+                    log_debug(f"Relevance-from-answer skipped: flat scores std={std:.5f} < 0.01")
+                    self.finished_signal.emit(None)
+                    return
 
 
 

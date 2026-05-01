@@ -112,7 +112,12 @@ def get_provider(name, api_key, config=None):
         # Check both top-level and search_config for these keys
         sc = config.get("search_config", {})
         base_url = config.get("local_llm_url") or sc.get("local_llm_url") or "http://localhost:1234/v1"
-        model = config.get("local_llm_model") or sc.get("local_llm_model") or "model-identifier"
+        model = (
+            sc.get("answer_local_model")
+            or sc.get("local_llm_model")
+            or config.get("local_llm_model")
+            or "model-identifier"
+        )
         return OpenAICompatibleProvider(api_key="", base_url=base_url, model=model)
 
     # Default to OpenAI

@@ -18,6 +18,8 @@ from .engine import (
     get_embeddings_batch,
     save_embedding,
     load_embedding,
+    load_embedding_exact,
+    note_has_embedding,
     flush_embedding_batch,
     _build_deck_query,
     get_embedding_engine_id,
@@ -127,7 +129,7 @@ class EmbeddingWorker(QThread):
     progress_update = pyqtSignal(int)
     progress_detail = pyqtSignal(object)
     log_message = pyqtSignal(str)
-    finished_signal = pyqtSignal(int, int, int, int)
+    finished_signal = pyqtSignal(int, int, int, int, int)
     error_signal = pyqtSignal(str)
 
     def __init__(self, ntf, note_count, checkpoint, resume_available, config=None):
@@ -166,11 +168,12 @@ class EmbeddingWorker(QThread):
         hours, minutes = divmod(minutes, 60)
         return f"{hours}h {minutes}m"
 
-    def _emit_detail(self, checked, processed, skipped, errors, pending_count=0):
+    def _emit_detail(self, checked, processed, refreshed, skipped, errors, pending_count=0):
         self.progress_detail.emit({
             "checked": checked,
             "total": self.note_count,
             "processed": processed,
+            "refreshed": refreshed,
             "skipped": skipped,
             "errors": errors,
             "batch_size": self._dynamic_batch_size,
@@ -207,20 +210,21 @@ class EmbeddingWorker(QThread):
             ntf_fields = self.ntf.get('note_type_fields') or {}
             use_first = bool(self.ntf.get('use_first_field_fallback', True))
             processed_note_ids = set(self.checkpoint.get('processed_note_ids', [])) if self.checkpoint and self.resume_available else set()
-            processed = len(processed_note_ids)
-            self._last_checkpoint_count = processed
+            processed = 0
+            refreshed = 0
+            self._last_checkpoint_count = len(processed_note_ids)
             skipped = 0
             errors = 0
             pending_notes = []
             failed_notes = {}
-            checked = processed
-            if processed:
-                self.log_message.emit(f"Resuming from checkpoint: {processed:,}/{self.note_count:,} notes already processed")
+            checked = len(processed_note_ids)
+            if checked:
+                self.log_message.emit(f"Resuming from checkpoint: {checked:,}/{self.note_count:,} notes already processed")
             self.log_message.emit(
                 f"Batch size: {self._dynamic_batch_size} notes/call"
                 + (" (dynamic)" if self._use_dynamic_batch else "")
             )
-            self._emit_detail(checked, processed, skipped, errors)
+            self._emit_detail(checked, processed, refreshed, skipped, errors)
             model_map = {}
             for m in mw.col.models.all():
                 if enabled_set and m['name'] not in enabled_set: continue
@@ -241,7 +245,7 @@ class EmbeddingWorker(QThread):
                     content = " ".join(fields[i].strip() for i in indices if i < len(fields) and fields[i].strip())
                     if not content: continue
                     ch = hashlib.md5(content.encode()).hexdigest()
-                    existing = load_embedding(nid, ch, engine_id=engine_id)
+                    existing = load_embedding_exact(nid, ch, engine_id=engine_id)
                     if existing is not None and (expected_dim is None or len(existing) == expected_dim):
                         if nid not in processed_note_ids:
                             processed_note_ids.add(nid)
@@ -249,25 +253,28 @@ class EmbeddingWorker(QThread):
                         checked += 1
                         if checked - self.last_progress_update >= self.progress_update_interval:
                             self.progress_update.emit(checked); self.last_progress_update = checked
-                            self._emit_detail(checked, processed, skipped, errors)
+                            self._emit_detail(checked, processed, refreshed, skipped, errors)
                             self._save_progress_checkpoint(processed_note_ids, errors, engine_id, checked, processed, skipped)
                         continue
-                    pending_notes.append((nid, ch, content))
+                    pending_notes.append((nid, ch, content, note_has_embedding(nid, any_engine=True)))
                     if len(pending_notes) >= self._dynamic_batch_size:
                         t0 = time.time()
                         batch_count = len(pending_notes)
                         self.status_update.emit(f"Embedding batch of {batch_count} notes...")
                         embs = get_embeddings_batch([n[2] for n in pending_notes], config=config)
                         if embs and len(embs) == len(pending_notes):
-                            for (rnid, rch, _), remb in zip(pending_notes, embs):
+                            for (rnid, rch, _, had_embedding), remb in zip(pending_notes, embs):
                                 save_embedding(rnid, rch, remb, batch_mode=True, engine_id=engine_id)
                                 processed_note_ids.add(rnid)
-                                processed += 1
+                                if had_embedding:
+                                    refreshed += 1
+                                else:
+                                    processed += 1
                                 checked += 1
                             flush_embedding_batch()
                             if checked - self.last_progress_update >= self.progress_update_interval:
                                 self.progress_update.emit(checked); self.last_progress_update = checked
-                            self._emit_detail(checked, processed, skipped, errors)
+                            self._emit_detail(checked, processed, refreshed, skipped, errors)
                             self._save_progress_checkpoint(processed_note_ids, errors, engine_id, checked, processed, skipped)
                             if self._use_dynamic_batch:
                                 dur = time.time() - t0
@@ -282,18 +289,21 @@ class EmbeddingWorker(QThread):
                 self.status_update.emit(f"Embedding final batch of {len(pending_notes)} notes...")
                 embs = get_embeddings_batch([n[2] for n in pending_notes], config=config)
                 if embs and len(embs) == len(pending_notes):
-                    for (rnid, rch, _), remb in zip(pending_notes, embs):
+                    for (rnid, rch, _, had_embedding), remb in zip(pending_notes, embs):
                         save_embedding(rnid, rch, remb, batch_mode=True, engine_id=engine_id)
                         processed_note_ids.add(rnid)
-                        processed += 1
+                        if had_embedding:
+                            refreshed += 1
+                        else:
+                            processed += 1
                         checked += 1
                     flush_embedding_batch()
-                    self._emit_detail(checked, processed, skipped, errors)
+                    self._emit_detail(checked, processed, refreshed, skipped, errors)
                     self._save_progress_checkpoint(processed_note_ids, errors, engine_id, checked, processed, skipped, force=True)
             if checked != self.last_progress_update:
                 self.progress_update.emit(checked)
             self._save_progress_checkpoint(processed_note_ids, errors, engine_id, checked, processed, skipped, force=True)
-            self.finished_signal.emit(processed, errors, skipped, 0)
+            self.finished_signal.emit(processed, errors, skipped, refreshed, 0)
         except Exception as e: self.error_signal.emit(str(e))
 
 

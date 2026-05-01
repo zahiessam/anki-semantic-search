@@ -104,6 +104,55 @@ def compute_tfidf_scores(notes, query_keywords):
     return tfidf_scores, high_freq_keywords
 
 
+def compute_bm25_scores(notes, query_keywords, k1=1.5, b=0.75):
+    """Compute BM25 scores over the loaded candidate notes.
+
+    This intentionally uses the current candidate set for IDF rather than a
+    persistent corpus-wide sparse index, keeping Retrieval V2 dependency-free.
+    """
+    if not notes or not query_keywords:
+        return {}, set()
+
+    note_tfs = {}
+    doc_freq = {}
+    doc_lengths = {}
+    total_length = 0
+    unique_keywords = list(dict.fromkeys(query_keywords))
+
+    for note in notes:
+        note_id = note["id"]
+        tokens = re.findall(r"\b\w+\b", (note.get("content") or "").lower())
+        doc_len = max(1, len(tokens))
+        doc_lengths[note_id] = doc_len
+        total_length += doc_len
+        text = " ".join(tokens)
+        note_tfs[note_id] = {}
+        for keyword in unique_keywords:
+            count = text.count(keyword)
+            if count > 0:
+                note_tfs[note_id][keyword] = count
+                doc_freq[keyword] = doc_freq.get(keyword, 0) + 1
+
+    total_notes = max(1, len(notes))
+    avg_doc_len = max(1.0, total_length / total_notes)
+    high_freq_keywords = {
+        keyword for keyword, freq in doc_freq.items() if (freq / total_notes) >= 0.65
+    }
+
+    scores = {}
+    for note_id, tfs in note_tfs.items():
+        doc_len = doc_lengths.get(note_id, avg_doc_len)
+        score = 0.0
+        for keyword, tf in tfs.items():
+            df = doc_freq.get(keyword, 0)
+            idf = math.log(1 + (total_notes - df + 0.5) / (df + 0.5))
+            denom = tf + k1 * (1 - b + b * (doc_len / avg_doc_len))
+            score += idf * ((tf * (k1 + 1)) / max(denom, 1e-9))
+        scores[note_id] = score
+
+    return scores, high_freq_keywords
+
+
 def aggregate_scored_notes_by_note_id(scored_notes):
     if not scored_notes:
         return []

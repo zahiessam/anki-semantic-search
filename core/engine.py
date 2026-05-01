@@ -808,6 +808,66 @@ def _load_embedding_from_json_legacy(note_id, content_hash):
         return None
 
 
+def load_embedding_exact(note_id, content_hash, db_path=None, engine_id=None):
+    try:
+        import sqlite3
+
+        engine_candidates = get_embedding_engine_candidates(engine_id=engine_id)
+        db_path = db_path or get_embeddings_db_path()
+
+        if os.path.exists(db_path):
+            conn = sqlite3.connect(db_path, timeout=10)
+            try:
+                for candidate in engine_candidates:
+                    row = conn.execute(
+                        "SELECT embedding_blob FROM embeddings WHERE engine_id = ? AND note_id = ? AND content_hash = ?",
+                        (candidate, note_id, content_hash),
+                    ).fetchone()
+                    if row:
+                        return _blob_to_embedding(row[0])
+            finally:
+                conn.close()
+
+        return _load_embedding_from_json_legacy(note_id, content_hash)
+    except Exception as exc:
+        if "Expecting" not in str(exc) and "delimiter" not in str(exc):
+            log_debug(f"Error loading exact embedding: {exc}")
+        return None
+
+
+def note_has_embedding(note_id, db_path=None, engine_id=None, any_engine=False):
+    try:
+        import sqlite3
+
+        engine_candidates = get_embedding_engine_candidates(engine_id=engine_id)
+        db_path = db_path or get_embeddings_db_path()
+
+        if os.path.exists(db_path):
+            conn = sqlite3.connect(db_path, timeout=10)
+            try:
+                if any_engine:
+                    row = conn.execute(
+                        "SELECT 1 FROM embeddings WHERE note_id = ? LIMIT 1",
+                        (note_id,),
+                    ).fetchone()
+                    if row:
+                        return True
+                else:
+                    for candidate in engine_candidates:
+                        row = conn.execute(
+                            "SELECT 1 FROM embeddings WHERE engine_id = ? AND note_id = ? LIMIT 1",
+                            (candidate, note_id),
+                        ).fetchone()
+                        if row:
+                            return True
+            finally:
+                conn.close()
+        return False
+    except Exception as exc:
+        log_debug(f"Error checking existing embedding: {exc}")
+        return False
+
+
 def load_embedding(note_id, content_hash, db_path=None, engine_id=None):
     try:
         import sqlite3

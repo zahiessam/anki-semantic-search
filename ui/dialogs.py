@@ -53,6 +53,7 @@ from ..utils import (
     get_config_value,
     get_effective_embedding_config,
     validate_embedding_config,
+    get_retrieval_config,
     get_addon_name,
     get_embeddings_db_path,
     get_embeddings_storage_path_for_read,
@@ -101,6 +102,62 @@ from ..core.errors import _is_embedding_dimension_mismatch
 _addon_theme = get_addon_theme
 ADDON_NAME = get_addon_name()
 _semantic_chunk_text = semantic_chunk_text
+
+
+def _prefilter_safety_reason(col, ntf, config):
+    """Return None when V2 can safely prefilter before loading full note text.
+
+    Unsafe cases deliberately fall back to the historical full loading path:
+    ambiguous/missing decks, unknown note types, missing selected fields without
+    first-field fallback, all-fields search across unknown/mixed types, or cached
+    history replay paths where note context must match prior results.
+    """
+    retrieval = get_retrieval_config(config)
+    if retrieval.get("retrieval_version") != "v2":
+        return "retrieval_version is legacy"
+    if not ntf:
+        return "no note_type_filter configured"
+    if config.get("_history_replay"):
+        return "history replay is active"
+
+    enabled_decks = ntf.get("enabled_decks") or []
+    if enabled_decks:
+        try:
+            all_decks = set(col.decks.all_names())
+        except Exception:
+            return "could not resolve deck names"
+        missing_decks = [deck for deck in enabled_decks if deck not in all_decks]
+        if missing_decks:
+            return f"selected deck(s) not found: {missing_decks[:3]}"
+
+    models = col.models.all()
+    model_by_name = {model.get("name"): model for model in models}
+    enabled_types = ntf.get("enabled_note_types") or []
+    if enabled_types:
+        missing_types = [name for name in enabled_types if name not in model_by_name]
+        if missing_types:
+            return f"selected note type(s) not found: {missing_types[:3]}"
+
+    search_all = bool(ntf.get("search_all_fields", False))
+    if search_all and not enabled_types:
+        return "all-fields search across unknown/mixed note types"
+
+    if not search_all:
+        ntf_fields = ntf.get("note_type_fields") or {}
+        use_first = bool(ntf.get("use_first_field_fallback", True))
+        type_names = enabled_types or list(model_by_name)
+        for model_name in type_names:
+            model = model_by_name.get(model_name)
+            if not model:
+                continue
+            available = {field.get("name", "").lower() for field in model.get("flds", [])}
+            wanted = {field.lower() for field in (ntf_fields.get(model_name) or [])}
+            if wanted and not wanted.issubset(available):
+                return f"selected field missing on {model_name}"
+            if not wanted and not use_first:
+                return f"no fields selected for {model_name} and first-field fallback disabled"
+
+    return None
 
 
 def get_safe_config(value):
@@ -153,6 +210,14 @@ def get_notes_content_with_col(col, config):
         ntf_fields = ntf.get('note_type_fields') or {}
         use_first = bool(ntf.get('use_first_field_fallback', True))
         fields_description = "all fields" if search_all else "per-type"
+
+    safety_reason = _prefilter_safety_reason(col, ntf, config)
+    retrieval = get_retrieval_config(config)
+    if retrieval.get("retrieval_version") == "v2":
+        if safety_reason:
+            log_debug(f"V2 note prefilter fallback: {safety_reason}")
+        else:
+            log_debug("V2 note prefilter safe: deck/note-type/field filters resolved")
 
     deck_q = _build_deck_query(ntf.get('enabled_decks') if ntf else None)
     note_ids = col.find_notes(deck_q) if deck_q else col.find_notes("")

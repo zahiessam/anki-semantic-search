@@ -2,10 +2,10 @@
 user_files/
 config.json
 meta.json
-# manifest.json should NOT be ignored
-!manifest.json
 *.db
 *.json
+# manifest.json should NOT be ignored
+!manifest.json
 *.log
 debug_log.txt
 search_history.json

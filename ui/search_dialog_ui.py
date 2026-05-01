@@ -586,7 +586,15 @@ def setup_ui(self):
 
 
 
+    self.answer_box.setObjectName("answerBox")
     self.answer_box.setReadOnly(True)
+
+    if hasattr(Qt, 'ScrollBarPolicy'):
+        self.answer_box.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.answer_box.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    else:
+        self.answer_box.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.answer_box.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
 
 
@@ -651,30 +659,29 @@ def setup_ui(self):
 
 
     answer_font_size = self.styling_config.get('answer_font_size', 13)
-
-
-
+    answer_bg = '#2d2d2d' if is_dark else '#ffffff'
+    answer_text = '#ffffff' if is_dark else '#1a1a1a'
     self.answer_box.setStyleSheet(
 
 
 
-        f"background-color: {'#2d2d2d' if is_dark else '#ffffff'}; "
+        f"QTextBrowser#answerBox, QTextEdit#answerBox {{ background-color: {answer_bg}; "
 
 
 
-        f"border: 2px solid #27ae60; color: {'#ffffff' if is_dark else '#1a1a1a'}; "
+        f"border: 2px solid #27ae60; color: {answer_text}; "
 
 
 
-        f"font-size: {answer_font_size}px; padding: 10px;"
+        f"font-size: {answer_font_size}px; padding: 10px; }} "
 
 
 
-        f"a {{ color: #3498db; text-decoration: underline; }} "
+        f"QTextBrowser#answerBox a, QTextEdit#answerBox a {{ color: #3498db; text-decoration: underline; }} "
 
 
 
-        f"a:hover {{ color: #5dade2; }} "
+        f"QTextBrowser#answerBox a:hover, QTextEdit#answerBox a:hover {{ color: #5dade2; }} "
 
 
 

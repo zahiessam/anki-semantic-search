@@ -12,11 +12,12 @@ from aqt.qt import QApplication
 from ..core.engine import _build_deck_query, get_models_with_fields
 from ..core.keyword_scoring import (
     _simple_stem,
+    compute_bm25_scores,
     compute_tfidf_scores,
     extract_keywords_improved,
     get_extended_stop_words,
 )
-from ..utils import load_config, log_debug
+from ..utils import get_retrieval_config, load_config, log_debug
 from ..utils.text import clean_html, clean_html_for_display, reveal_cloze, semantic_chunk_text
 
 
@@ -241,9 +242,16 @@ def extract_keywords_for_dialog(dialog, query, agent_debug_log=None):
 
 
 def compute_tfidf_scores_for_dialog(dialog, notes, query_keywords):
-    scores, high_freq_keywords = compute_tfidf_scores(notes, query_keywords)
+    config = load_config()
+    retrieval = get_retrieval_config(config)
+    method = retrieval.get("keyword_scoring_method", "tfidf")
+    if method == "bm25":
+        scores, high_freq_keywords = compute_bm25_scores(notes, query_keywords)
+    else:
+        scores, high_freq_keywords = compute_tfidf_scores(notes, query_keywords)
     try:
         dialog._query_high_freq_keywords = high_freq_keywords
+        dialog._query_keyword_scoring_method = method
     except Exception:
         pass
     return scores
