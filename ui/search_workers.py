@@ -13,7 +13,12 @@ from aqt.qt import QThread, pyqtSignal
 from ..core.compat import _ensure_stderr_patched, _patch_colorama_early
 from ..core.engine import get_embedding_for_query, get_embeddings_batch, load_embedding
 from ..core.errors import _is_embedding_dimension_mismatch
-from ..utils.config import get_retrieval_config
+from ..utils.config import (
+    DEFAULT_RERANK_MODEL,
+    RERANK_TOP_K_DEFAULT,
+    get_rerank_config,
+    get_retrieval_config,
+)
 from ..utils.log import log_debug
 from ..utils.text import semantic_chunk_text
 
@@ -462,7 +467,7 @@ class EmbeddingSearchWorker(QThread):
 
 
 
-MAX_RERANK_COUNT = 15  # Limit rerank to top 15 to avoid CPU bottleneck (~2s with 50 notes)
+MAX_RERANK_COUNT = RERANK_TOP_K_DEFAULT
 
 
 
@@ -481,6 +486,18 @@ RRF_K = 60  # Reciprocal Rank Fusion constant (standard in retrieval literature;
 # --- Chunking And Reranking Helpers ---
 
 _semantic_chunk_text = semantic_chunk_text
+_RERANK_MODEL_CACHE = {}
+
+
+def _truncate_for_rerank(text):
+    return (text or "")[:512]
+
+
+def _get_cross_encoder(CrossEncoder, model_name):
+    model_name = (model_name or "").strip() or DEFAULT_RERANK_MODEL
+    if model_name not in _RERANK_MODEL_CACHE:
+        _RERANK_MODEL_CACHE[model_name] = CrossEncoder(model_name)
+    return _RERANK_MODEL_CACHE[model_name]
 
 
 
@@ -504,7 +521,7 @@ def _do_rerank(query, scored_notes, top_k, search_config):
 
 
 
-    Uses top_k=15 by default to avoid CPU bottleneck. Blends cross-encoder scores with pre-rerank.
+    Uses configured top_k by default to avoid CPU bottleneck. Blends cross-encoder scores with pre-rerank.
 
 
 
@@ -528,7 +545,12 @@ def _do_rerank(query, scored_notes, top_k, search_config):
 
 
 
-    top_k = min(top_k, MAX_RERANK_COUNT)
+    rerank_config = get_rerank_config(search_config)
+    rerank_model = rerank_config.get("rerank_model") or DEFAULT_RERANK_MODEL
+    rerank_top_k = int(rerank_config.get("rerank_top_k") or RERANK_TOP_K_DEFAULT)
+    rerank_timeout = int(rerank_config.get("rerank_timeout_seconds") or 90)
+    top_k = rerank_top_k
+    log_debug(f"Rerank model: {rerank_model}, top_k: {top_k}, timeout: {rerank_timeout}s")
 
 
 
@@ -548,7 +570,7 @@ def _do_rerank(query, scored_notes, top_k, search_config):
 
 
 
-    contents = [note.get('content', '')[:512] for _, note in top_notes]
+    contents = [_truncate_for_rerank(note.get('content', '')) for _, note in top_notes]
 
 
 
@@ -600,13 +622,17 @@ def _do_rerank(query, scored_notes, top_k, search_config):
 
 
 
-                    payload = json.dumps({"query": query, "contents": contents})
+                    payload = json.dumps({"query": query, "contents": contents, "model": rerank_model})
 
 
 
                     creationflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
 
 
+
+                    env = os.environ.copy()
+                    env["HF_HUB_OFFLINE"] = "1"
+                    env["TRANSFORMERS_OFFLINE"] = "1"
 
                     proc = subprocess.Popen(
 
@@ -620,7 +646,7 @@ def _do_rerank(query, scored_notes, top_k, search_config):
 
 
 
-                        text=True, creationflags=creationflags
+                        text=True, creationflags=creationflags, env=env
 
 
 
@@ -628,7 +654,7 @@ def _do_rerank(query, scored_notes, top_k, search_config):
 
 
 
-                    out, err = proc.communicate(input=payload, timeout=60)
+                    out, err = proc.communicate(input=payload, timeout=rerank_timeout)
 
 
 
@@ -652,7 +678,7 @@ def _do_rerank(query, scored_notes, top_k, search_config):
 
 
 
-                        log_debug(f"Rerank helper error: {data['error']}")
+                        log_debug(f"Rerank helper error for {data.get('model') or rerank_model}: {data['error']}")
 
 
 
@@ -736,11 +762,11 @@ def _do_rerank(query, scored_notes, top_k, search_config):
 
 
 
-                    # Soft floor: notes that were top-15 by pre-rerank don't show below 55%
+                    # Soft floor: notes that were top-ranked before rerank don't show below 55%
 
 
 
-                    top_pre_ids = set(nid for _, nid in sorted(pre_scores.items(), key=lambda x: -x[1])[:15])
+                    top_pre_ids = set(nid for _, nid in sorted(pre_scores.items(), key=lambda x: -x[1])[:top_k])
 
 
 
@@ -800,7 +826,7 @@ def _do_rerank(query, scored_notes, top_k, search_config):
 
 
 
-                    log_debug("Rerank helper timed out")
+                    log_debug(f"Rerank helper timed out after {rerank_timeout}s")
 
 
 
@@ -920,11 +946,25 @@ def _do_rerank(query, scored_notes, top_k, search_config):
 
 
 
-        model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+        old_hf_offline = os.environ.get("HF_HUB_OFFLINE")
+        old_transformers_offline = os.environ.get("TRANSFORMERS_OFFLINE")
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        try:
+            model = _get_cross_encoder(CrossEncoder, rerank_model)
+        finally:
+            if old_hf_offline is None:
+                os.environ.pop("HF_HUB_OFFLINE", None)
+            else:
+                os.environ["HF_HUB_OFFLINE"] = old_hf_offline
+            if old_transformers_offline is None:
+                os.environ.pop("TRANSFORMERS_OFFLINE", None)
+            else:
+                os.environ["TRANSFORMERS_OFFLINE"] = old_transformers_offline
 
 
 
-        pairs = [(query, note['content'][:512]) for _, note in top_notes]
+        pairs = [(query, _truncate_for_rerank(note.get('content', ''))) for _, note in top_notes]
 
 
 
@@ -996,11 +1036,11 @@ def _do_rerank(query, scored_notes, top_k, search_config):
 
 
 
-        # Soft floor: notes that were top-15 by pre-rerank don't show below 55%
+        # Soft floor: notes that were top-ranked before rerank don't show below 55%
 
 
 
-        top_pre_ids = set(nid for _, nid in sorted(pre_scores.items(), key=lambda x: -x[1])[:15])
+        top_pre_ids = set(nid for _, nid in sorted(pre_scores.items(), key=lambda x: -x[1])[:top_k])
 
 
 

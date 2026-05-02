@@ -9,6 +9,7 @@ and worker classes are available.
 # Imports
 # ============================================================================
 
+import datetime
 import json
 import re
 import urllib.request
@@ -34,12 +35,18 @@ from ..core.engine import estimate_tokens, get_embedding_for_query, get_embeddin
 from ..core.errors import _is_embedding_dimension_mismatch
 from ..utils import (
     format_dimension_mismatch_hint,
+    get_effective_embedding_config,
     get_embeddings_db_path,
     get_retrieval_config,
     load_config,
     load_search_history,
     log_debug,
     save_search_history,
+)
+from ..utils.search_research_log import (
+    compact_results,
+    new_search_run_id,
+    write_search_research_report,
 )
 
 
@@ -293,6 +300,158 @@ class AnthropicStreamWorker(QThread):
 
 
         return f"{name} \u2014 {model}"
+
+
+    def _get_embedding_source_text(self, config):
+
+        """Return a compact label for the embedding provider/model actually configured."""
+
+        if not config:
+
+            return "unknown"
+
+        effective = get_effective_embedding_config(config)
+
+        sc = effective.get("search_config") or {}
+
+        engine = (sc.get("embedding_engine") or "unknown").strip().lower()
+
+        if engine == "local_openai":
+
+            model = (
+                sc.get("local_llm_model")
+                or sc.get("embedding_local_model")
+                or "local-embedding-model"
+            )
+
+            return f"local_openai:{model}"
+
+        if engine == "ollama":
+
+            model = sc.get("ollama_embed_model") or sc.get("embedding_local_model") or "nomic-embed-text"
+
+            return f"ollama:{model}"
+
+        if engine == "voyage":
+
+            return f"voyage:{sc.get('voyage_embedding_model') or 'voyage-3.5-lite'}"
+
+        if engine == "openai":
+
+            return f"openai:{sc.get('openai_embedding_model') or 'text-embedding-3-small'}"
+
+        if engine == "cohere":
+
+            return f"cohere:{sc.get('cohere_embedding_model') or 'embed-english-v3.0'}"
+
+        return engine or "unknown"
+
+
+    def _get_rerank_source_text(self, search_config, effective_method):
+
+        """Return reranker model and whether it actually ran."""
+
+        if "Re-ranked" not in (effective_method or ""):
+
+            return "off"
+
+        model = (search_config.get("rerank_model") or "cross-encoder/ms-marco-MiniLM-L6-v2").strip()
+
+        status = "ok" if getattr(self, "_last_rerank_success", False) else "skipped"
+
+        return f"{model} ({status})"
+
+
+    def _build_result_source_text(self, config, effective_method):
+
+        search_config = config.get("search_config") or {}
+
+        mode = (search_config.get("relevance_mode") or "balanced").strip().lower()
+
+        mode_display = {"focused": "Focused", "balanced": "Balanced", "broad": "Broad"}.get(
+            mode,
+            mode.capitalize() if mode else "Balanced",
+        )
+
+        answer = self._get_answer_source_text(config) or "none"
+
+        embeddings = self._get_embedding_source_text(config)
+
+        reranker = self._get_rerank_source_text(search_config, effective_method)
+
+        return (
+            f"Results from: {effective_method} \u00b7 {mode_display} "
+            f"\u00b7 Answer: {answer} \u00b7 Embeddings: {embeddings} \u00b7 Reranker: {reranker}"
+        )
+
+
+    def _init_search_research_report(self, query, config):
+
+        sc = (config or {}).get("search_config") or {}
+
+        self._search_research_report = {
+            "run_id": new_search_run_id(),
+            "started_at": datetime.datetime.now().isoformat(),
+            "query": query,
+            "config": config,
+            "models": {
+                "answer": self._get_answer_source_text(config),
+                "embeddings": self._get_embedding_source_text(config),
+                "reranker": sc.get("rerank_model") or "off",
+            },
+            "settings": {
+                "search_method": sc.get("search_method"),
+                "relevance_mode": sc.get("relevance_mode"),
+                "enable_query_expansion": sc.get("enable_query_expansion"),
+                "enable_hyde": sc.get("enable_hyde"),
+                "enable_rerank": sc.get("enable_rerank"),
+                "rerank_top_k": sc.get("rerank_top_k"),
+                "rerank_timeout_seconds": sc.get("rerank_timeout_seconds"),
+                "hybrid_embedding_weight": sc.get("hybrid_embedding_weight"),
+                "min_relevance_percent": sc.get("min_relevance_percent"),
+                "max_results": sc.get("max_results"),
+                "retrieval_version": sc.get("retrieval_version"),
+                "keyword_scoring_method": sc.get("keyword_scoring_method"),
+                "enable_mmr_diversity": sc.get("enable_mmr_diversity"),
+                "mmr_lambda": sc.get("mmr_lambda"),
+                "mmr_candidate_pool": sc.get("mmr_candidate_pool"),
+            },
+            "stages": [],
+        }
+
+
+    def _research_stage(self, name, **data):
+
+        report = getattr(self, "_search_research_report", None)
+
+        if not isinstance(report, dict):
+
+            return
+
+        report.setdefault("stages", []).append({
+            "name": name,
+            "timestamp": datetime.datetime.now().isoformat(),
+            **data,
+        })
+
+
+    def _write_search_research_report(self, **updates):
+
+        report = getattr(self, "_search_research_report", None)
+
+        if not isinstance(report, dict):
+
+            return None
+
+        report.update(updates)
+
+        path = write_search_research_report(report)
+
+        if path:
+
+            log_debug(f"Search research report written: {path}")
+
+        return path
 
 
 
@@ -846,6 +1005,13 @@ class AnthropicStreamWorker(QThread):
 
             self._rerank_continue = (notes, effective_method, search_config)
 
+            self._research_stage(
+                "pre_cross_encoder_candidates",
+                effective_method=effective_method,
+                total_candidates=len(scored_notes or []),
+                top_results=compact_results(scored_notes, limit=50),
+            )
+
 
 
             if hasattr(self, 'status_label') and self.status_label:
@@ -961,6 +1127,15 @@ class AnthropicStreamWorker(QThread):
 
 
         self.status_label.setText("Error occurred")
+
+        self._research_stage("embedding_error", error=error_msg)
+
+        self._write_search_research_report(
+            completed_at=datetime.datetime.now().isoformat(),
+            final_status="embedding_error",
+            error=error_msg,
+            final_results=compact_results(getattr(self, "all_scored_notes", []), limit=100),
+        )
 
 
 
@@ -1078,12 +1253,27 @@ class AnthropicStreamWorker(QThread):
 
         log_debug(f"Filtered to {len(scored_notes)} potentially relevant notes (method: {effective_method}, total above threshold: {total_above_threshold})")
 
+        self._research_stage(
+            "retrieval_finalized",
+            effective_method=effective_method,
+            total_candidates=len(scored_notes or []),
+            total_above_threshold=total_above_threshold,
+            top_results=compact_results(scored_notes, limit=50),
+        )
+
         retrieval = get_retrieval_config(config)
         if retrieval.get("retrieval_version") == "v2":
             for score, note in scored_notes:
                 note['_retrieval_score'] = score
             scored_notes = self._apply_mmr_diversity(scored_notes, retrieval, config)
             if scored_notes and getattr(self, '_mmr_applied', False):
+
+                self._research_stage(
+                    "mmr_diversity_applied",
+                    candidates_after_mmr=len(scored_notes),
+                    top_results=compact_results(scored_notes, limit=50),
+                )
+
                 self._scored_notes_for_context = None
             if (config.get("search_config") or {}).get("verbose_search_debug"):
                 log_debug(
@@ -1112,73 +1302,7 @@ class AnthropicStreamWorker(QThread):
 
             search_config = config.get("search_config") or {}
 
-
-
-            mode = (search_config.get("relevance_mode") or "").strip().lower()
-
-
-
-            if mode == "focused":
-
-
-
-                mode_display = "Focused"
-
-
-
-            elif mode == "broad":
-
-
-
-                mode_display = "Broad"
-
-
-
-            elif mode:
-
-
-
-                mode_display = mode.capitalize()
-
-
-
-            else:
-
-
-
-                mode_display = "Balanced"
-
-
-
-            engine = (search_config.get("embedding_engine") or "ollama").strip().lower()
-
-
-
-            engine_display = {
-
-
-
-                "ollama": "Ollama (local)",
-
-
-
-                "voyage": "Voyage AI",
-
-
-
-                "openai": "OpenAI",
-
-
-
-                "cohere": "Cohere",
-
-
-
-            }.get(engine, engine or "unknown")
-
-
-
-            label_text = f"Results from: {effective_method} \u00b7 {mode_display} \u00b7 Embeddings: {engine_display}"
+            label_text = self._build_result_source_text(config, effective_method)
 
 
 
@@ -1251,6 +1375,19 @@ class AnthropicStreamWorker(QThread):
 
 
             self.status_label.setText("No matches found")
+
+            self._research_stage(
+                "no_matches",
+                searched_notes=n_searched,
+                fields=getattr(self, 'fields_description', 'Text & Extra'),
+            )
+
+            self._write_search_research_report(
+                completed_at=datetime.datetime.now().isoformat(),
+                final_status="no_matches",
+                searched_notes=n_searched,
+                final_results=[],
+            )
 
 
 
@@ -1928,6 +2065,15 @@ class AnthropicStreamWorker(QThread):
 
                 self.status_label.setText("Error occurred")
 
+                self._research_stage("answer_error", error=error_msg)
+
+                self._write_search_research_report(
+                    completed_at=datetime.datetime.now().isoformat(),
+                    final_status="answer_error",
+                    error=error_msg,
+                    final_results=compact_results(getattr(self, "all_scored_notes", []), limit=100),
+                )
+
 
 
                 return
@@ -2113,6 +2259,15 @@ class AnthropicStreamWorker(QThread):
 
         self.status_label.setText("Error occurred")
 
+        self._research_stage("answer_error", error=error_msg)
+
+        self._write_search_research_report(
+            completed_at=datetime.datetime.now().isoformat(),
+            final_status="answer_error",
+            error=error_msg,
+            final_results=compact_results(getattr(self, "all_scored_notes", []), limit=100),
+        )
+
 
 
 
@@ -2164,6 +2319,15 @@ class AnthropicStreamWorker(QThread):
 
 
         save_search_history(getattr(self, 'current_query', ''), answer, relevant_note_ids, scored_notes, context_note_ids)
+
+        self._research_stage(
+            "answer_generated",
+            answer_model=self._get_answer_source_text(config),
+            answer_length=len(answer or ""),
+            context_note_ids=list(context_note_ids or []),
+            cited_note_ids=list(relevant_note_ids or []),
+            relevant_indices=list(relevant_indices or []),
+        )
 
 
 
@@ -2401,6 +2565,16 @@ class AnthropicStreamWorker(QThread):
 
             self.all_scored_notes = result
 
+            self._research_stage(
+                "relevance_from_answer_rerank",
+                success=True,
+                top_results=compact_results(self.all_scored_notes, limit=50),
+            )
+
+        else:
+
+            self._research_stage("relevance_from_answer_rerank", success=False)
+
 
 
         self._display_answer_and_notes_after_rerank(answer, config, used_history, notes)
@@ -2460,6 +2634,24 @@ class AnthropicStreamWorker(QThread):
 
 
         self.filter_and_display_notes()
+
+        self._research_stage(
+            "final_display",
+            used_history=bool(used_history),
+            displayed_rows=self.results_list.rowCount() if hasattr(self, "results_list") else None,
+            final_results=compact_results(getattr(self, "all_scored_notes", []), limit=100),
+            cited_note_ids=list(getattr(self, "_cited_note_ids", set()) or []),
+            context_note_ids=list(getattr(self, "_context_note_ids", []) or []),
+        )
+
+        self._write_search_research_report(
+            completed_at=datetime.datetime.now().isoformat(),
+            used_history=bool(used_history),
+            final_answer_length=len(answer or ""),
+            final_results=compact_results(getattr(self, "all_scored_notes", []), limit=100),
+            cited_note_ids=list(getattr(self, "_cited_note_ids", set()) or []),
+            context_note_ids=list(getattr(self, "_context_note_ids", []) or []),
+        )
 
 
 
@@ -2605,6 +2797,10 @@ class AnthropicStreamWorker(QThread):
 
 
 
+        self._init_search_research_report(query, config)
+
+        self._research_stage("search_started")
+
         # Disable search button to prevent multiple clicks
 
 
@@ -2636,6 +2832,8 @@ class AnthropicStreamWorker(QThread):
             self.search_method_result_label.setText("")
 
 
+
+        self._last_rerank_success = False
 
         self.total_notes_searched = None
 
@@ -3176,6 +3374,13 @@ class AnthropicStreamWorker(QThread):
 
             self._rerank_continue = (notes, effective_method, search_config)
 
+            self._research_stage(
+                "pre_cross_encoder_candidates",
+                effective_method=effective_method,
+                total_candidates=len(scored_notes or []),
+                top_results=compact_results(scored_notes, limit=50),
+            )
+
 
 
             if hasattr(self, 'status_label') and self.status_label:
@@ -3288,6 +3493,8 @@ class AnthropicStreamWorker(QThread):
 
         self.search_btn.setEnabled(True)
 
+        self._last_rerank_success = bool(success is True)
+
 
 
 
@@ -3345,6 +3552,13 @@ class AnthropicStreamWorker(QThread):
 
 
 
+
+        self._research_stage(
+            "cross_encoder_rerank",
+            success=bool(success is True),
+            rerank_status="ok" if success is True else "skipped_or_failed",
+            top_results=compact_results(scored_notes, limit=50),
+        )
 
         notes, effective_method, search_config = getattr(self, '_rerank_continue', (None, '', {}))
 
@@ -7304,6 +7518,16 @@ Rules:
 
         save_search_history(query, answer, relevant_note_ids, scored_notes, context_note_ids)
 
+        self._research_stage(
+            "answer_generated",
+            answer_model=self._get_answer_source_text(config),
+            answer_length=len(answer or ""),
+            context_note_ids=list(context_note_ids or []),
+            cited_note_ids=list(relevant_note_ids or []),
+            relevant_indices=list(relevant_indices or []),
+            streaming=True,
+        )
+
 
 
         self._context_note_ids = context_note_ids
@@ -10067,7 +10291,9 @@ Rules:
 # ============================================================================
 
 _AISEARCH_METHODS_FROM_WORKER = (
-    '_get_answer_source_text', '_on_embedding_search_progress', '_show_busy_progress', '_show_centile_progress',
+    '_get_answer_source_text', '_get_embedding_source_text', '_get_rerank_source_text', '_build_result_source_text',
+    '_init_search_research_report', '_research_stage', '_write_search_research_report',
+    '_on_embedding_search_progress', '_show_busy_progress', '_show_centile_progress',
     '_start_estimated_progress_timer', '_stop_estimated_progress_timer', '_hide_busy_progress', '_on_embedding_search_finished',
     '_on_keyword_filter_continue_done', '_on_embedding_search_error', '_on_rerank_done', '_on_get_notes_done', '_on_keyword_filter_done',
     '_perform_search_continue', 'perform_search',

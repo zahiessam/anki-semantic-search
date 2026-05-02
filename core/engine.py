@@ -509,6 +509,7 @@ def analyze_note_eligibility(ntf):
             return {
                 "total_notes": 0,
                 "eligible_count": 0,
+                "eligible_note_ids": [],
                 "filtered_out_note_type_count": 0,
                 "no_selected_fields_count": 0,
                 "empty_selected_fields_count": 0,
@@ -520,6 +521,7 @@ def analyze_note_eligibility(ntf):
             return {
                 "total_notes": 0,
                 "eligible_count": 0,
+                "eligible_note_ids": [],
                 "filtered_out_note_type_count": 0,
                 "no_selected_fields_count": 0,
                 "empty_selected_fields_count": 0,
@@ -552,6 +554,7 @@ def analyze_note_eligibility(ntf):
             }
 
         eligible_count = 0
+        eligible_note_ids = []
         filtered_out_note_type_count = 0
         no_selected_fields_count = 0
         empty_selected_fields_count = 0
@@ -583,6 +586,7 @@ def analyze_note_eligibility(ntf):
             fields = flds_str.split("\x1f")
             if any(i < len(fields) and fields[i].strip() for i in indices):
                 eligible_count += 1
+                eligible_note_ids.append(nid)
                 continue
             empty_selected_fields_count += 1
             ineligible_notes.append({
@@ -594,6 +598,7 @@ def analyze_note_eligibility(ntf):
         return {
             "total_notes": len(note_ids),
             "eligible_count": eligible_count,
+            "eligible_note_ids": eligible_note_ids,
             "filtered_out_note_type_count": filtered_out_note_type_count,
             "no_selected_fields_count": no_selected_fields_count,
             "empty_selected_fields_count": empty_selected_fields_count,
@@ -604,6 +609,7 @@ def analyze_note_eligibility(ntf):
         return {
             "total_notes": 0,
             "eligible_count": 0,
+            "eligible_note_ids": [],
             "filtered_out_note_type_count": 0,
             "no_selected_fields_count": 0,
             "empty_selected_fields_count": 0,
@@ -710,6 +716,10 @@ def save_embedding(note_id, content_hash, embedding, batch_mode=True, storage_pa
         try:
             _embeddings_db_ensure_table(conn)
             conn.execute(
+                "DELETE FROM embeddings WHERE engine_id = ? AND note_id = ?",
+                (engine_id, note_id),
+            )
+            conn.execute(
                 "INSERT OR REPLACE INTO embeddings (engine_id, note_id, chunk_index, content_hash, embedding_blob, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     engine_id,
@@ -753,6 +763,11 @@ def flush_embedding_batch(storage_path=None):
                         data.get("timestamp") or datetime.datetime.now().isoformat(),
                     )
                 )
+            delete_keys = sorted({(row[0], row[1]) for row in rows})
+            conn.executemany(
+                "DELETE FROM embeddings WHERE engine_id = ? AND note_id = ?",
+                delete_keys,
+            )
             conn.executemany(
                 "INSERT OR REPLACE INTO embeddings (engine_id, note_id, chunk_index, content_hash, embedding_blob, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
                 rows,
@@ -866,6 +881,39 @@ def note_has_embedding(note_id, db_path=None, engine_id=None, any_engine=False):
     except Exception as exc:
         log_debug(f"Error checking existing embedding: {exc}")
         return False
+
+
+def load_embedding_key_index(engine_id=None, db_path=None):
+    """Return existing exact embedding keys and note ids for fast index refreshes."""
+    try:
+        import sqlite3
+
+        engine_candidates = get_embedding_engine_candidates(engine_id=engine_id)
+        db_path = db_path or get_embeddings_db_path()
+        exact_keys = set()
+        note_ids_any_engine = set()
+
+        if not os.path.exists(db_path):
+            return exact_keys, note_ids_any_engine
+
+        conn = sqlite3.connect(db_path, timeout=30)
+        try:
+            _embeddings_db_ensure_table(conn)
+            placeholders = ",".join("?" for _ in engine_candidates)
+            for note_id, content_hash in conn.execute(
+                f"SELECT note_id, content_hash FROM embeddings WHERE engine_id IN ({placeholders})",
+                engine_candidates,
+            ):
+                exact_keys.add((int(note_id), str(content_hash)))
+            for (note_id,) in conn.execute("SELECT DISTINCT note_id FROM embeddings"):
+                note_ids_any_engine.add(int(note_id))
+        finally:
+            conn.close()
+
+        return exact_keys, note_ids_any_engine
+    except Exception as exc:
+        log_debug(f"Error loading embedding key index: {exc}")
+        return set(), set()
 
 
 def load_embedding(note_id, content_hash, db_path=None, engine_id=None):

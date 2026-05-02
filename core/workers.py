@@ -19,7 +19,7 @@ from .engine import (
     save_embedding,
     load_embedding,
     load_embedding_exact,
-    note_has_embedding,
+    load_embedding_key_index,
     flush_embedding_batch,
     _build_deck_query,
     get_embedding_engine_id,
@@ -202,6 +202,18 @@ class EmbeddingWorker(QThread):
             expected_dim = len(test_emb) if test_emb else None
             config = self.config
             engine_id = get_embedding_engine_id(config)
+            self.log_message.emit(
+                f"Embedding engine: {engine_id}"
+            )
+            self.status_update.emit("Loading existing embedding index...")
+            existing_embedding_keys, existing_note_ids_any_engine = load_embedding_key_index(
+                engine_id=engine_id,
+                db_path=get_embeddings_db_path(),
+            )
+            if existing_embedding_keys:
+                self.log_message.emit(
+                    f"Fast skip index loaded: {len(existing_embedding_keys):,} existing embeddings"
+                )
             self._start_time = time.time()
             deck_q = _build_deck_query(self.ntf.get('enabled_decks'))
             note_ids = mw.col.find_notes(deck_q) if deck_q else mw.col.find_notes("")
@@ -239,14 +251,20 @@ class EmbeddingWorker(QThread):
                 if self.isInterruptionRequested(): break
                 while self._is_paused: time.sleep(0.1)
                 try:
+                    if nid in processed_note_ids:
+                        continue
                     indices = model_map.get(mid)
                     if not indices: continue
                     fields = flds_str.split("\x1f")
                     content = " ".join(fields[i].strip() for i in indices if i < len(fields) and fields[i].strip())
                     if not content: continue
                     ch = hashlib.md5(content.encode()).hexdigest()
-                    existing = load_embedding_exact(nid, ch, engine_id=engine_id)
-                    if existing is not None and (expected_dim is None or len(existing) == expected_dim):
+                    existing_key = (nid, ch) in existing_embedding_keys
+                    existing = None
+                    if not existing_key:
+                        existing = load_embedding_exact(nid, ch, engine_id=engine_id)
+                        existing_key = existing is not None and (expected_dim is None or len(existing) == expected_dim)
+                    if existing_key:
                         if nid not in processed_note_ids:
                             processed_note_ids.add(nid)
                         skipped += 1
@@ -256,7 +274,7 @@ class EmbeddingWorker(QThread):
                             self._emit_detail(checked, processed, refreshed, skipped, errors)
                             self._save_progress_checkpoint(processed_note_ids, errors, engine_id, checked, processed, skipped)
                         continue
-                    pending_notes.append((nid, ch, content, note_has_embedding(nid, any_engine=True)))
+                    pending_notes.append((nid, ch, content, nid in existing_note_ids_any_engine))
                     if len(pending_notes) >= self._dynamic_batch_size:
                         t0 = time.time()
                         batch_count = len(pending_notes)
@@ -265,6 +283,8 @@ class EmbeddingWorker(QThread):
                         if embs and len(embs) == len(pending_notes):
                             for (rnid, rch, _, had_embedding), remb in zip(pending_notes, embs):
                                 save_embedding(rnid, rch, remb, batch_mode=True, engine_id=engine_id)
+                                existing_embedding_keys.add((rnid, rch))
+                                existing_note_ids_any_engine.add(rnid)
                                 processed_note_ids.add(rnid)
                                 if had_embedding:
                                     refreshed += 1
@@ -291,6 +311,8 @@ class EmbeddingWorker(QThread):
                 if embs and len(embs) == len(pending_notes):
                     for (rnid, rch, _, had_embedding), remb in zip(pending_notes, embs):
                         save_embedding(rnid, rch, remb, batch_mode=True, engine_id=engine_id)
+                        existing_embedding_keys.add((rnid, rch))
+                        existing_note_ids_any_engine.add(rnid)
                         processed_note_ids.add(rnid)
                         if had_embedding:
                             refreshed += 1

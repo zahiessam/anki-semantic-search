@@ -5,6 +5,7 @@
 # ============================================================================
 
 import os
+import sqlite3
 
 try:
     import sip
@@ -30,7 +31,12 @@ from .theme import (
     settings_status_label_style,
     settings_text_style,
 )
-from .widgets import CollapsibleSection, settings_field_row
+from .widgets import (
+    CollapsibleSection,
+    apply_setting_row_tooltip,
+    settings_field_row,
+    sync_setting_row_tooltips,
+)
 from ..core.engine import (
     analyze_note_eligibility,
     clear_checkpoint,
@@ -52,12 +58,23 @@ from ..utils import (
     format_partial_failure_completion,
     format_partial_failure_progress,
     get_effective_embedding_config,
+    get_embeddings_db_path,
     get_embeddings_storage_path_for_read,
     get_retrieval_config,
     load_config,
     log_debug,
     save_config,
     validate_embedding_config,
+)
+from ..utils.config import (
+    DEFAULT_RERANK_MODEL,
+    RERANK_TIMEOUT_SECONDS_DEFAULT,
+    RERANK_TIMEOUT_SECONDS_MAX,
+    RERANK_TIMEOUT_SECONDS_MIN,
+    RERANK_TOP_K_DEFAULT,
+    RERANK_TOP_K_MAX,
+    RERANK_TOP_K_MIN,
+    get_rerank_config,
 )
 
 
@@ -81,6 +98,224 @@ EMBEDDING_CLOUD_PROVIDERS = [
     ("Cohere", "Cohere", "co-..."),
 ]
 
+RERANK_MODEL_PRESETS = [
+    ("Fast default - MiniLM", "cross-encoder/ms-marco-MiniLM-L6-v2"),
+    ("Stronger general - BGE v2 M3", "BAAI/bge-reranker-v2-m3"),
+    ("Medical experimental - BiomedBERT", "NeuML/biomedbert-base-reranker"),
+]
+
+
+class RerankModelDownloadWorker(QThread):
+    """Download/warm a Cross-Encoder model without blocking Settings."""
+
+    progress_signal = pyqtSignal(int, str)
+    finished_signal = pyqtSignal(bool, str)
+
+    def __init__(self, python_path, model_name):
+        super().__init__()
+        self.python_path = python_path
+        self.model_name = model_name
+
+    def run(self):
+        import json
+        import os
+        import subprocess
+        import sys
+        import time
+
+        python_exe = _resolve_external_python_exe(self.python_path) if self.python_path else sys.executable
+        if not python_exe:
+            self.finished_signal.emit(False, "Select a valid Python first.")
+            return
+
+        script = r'''
+import fnmatch
+import json
+import sys
+
+from huggingface_hub import HfApi, hf_hub_download
+
+model = sys.argv[1]
+
+def emit(percent, message):
+    print(json.dumps({"percent": int(percent), "message": message}), flush=True)
+
+def fmt_size(size):
+    if not size:
+        return "unknown size"
+    units = ["B", "KB", "MB", "GB"]
+    value = float(size)
+    unit = units[0]
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            break
+        value /= 1024
+    return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
+
+allow_patterns = (
+    "*.bin",
+    "*.json",
+    "*.model",
+    "*.safetensors",
+    "*.txt",
+    "merges.txt",
+    "modules.json",
+    "sentence_bert_config.json",
+    "special_tokens_map.json",
+    "tokenizer*",
+    "vocab*",
+)
+ignore_patterns = (
+    ".gitattributes",
+    "README*",
+    "*.md",
+    "flax_model*",
+    "onnx/*",
+    "openvino/*",
+    "rust_model*",
+    "tf_model*",
+)
+
+def allowed(name):
+    if any(fnmatch.fnmatch(name, pattern) for pattern in ignore_patterns):
+        return False
+    return any(fnmatch.fnmatch(name, pattern) for pattern in allow_patterns)
+
+emit(1, f"Reading model file list for {model}...")
+try:
+    info = HfApi().model_info(model, files_metadata=True)
+except TypeError:
+    info = HfApi().model_info(model)
+files = [
+    sibling
+    for sibling in info.siblings
+    if sibling.rfilename and allowed(sibling.rfilename)
+]
+if not files:
+    raise RuntimeError("No downloadable model files were found.")
+
+total = len(files)
+total_size = sum((getattr(sibling, "size", 0) or 0) for sibling in files)
+emit(3, f"Found {total} files ({fmt_size(total_size)} total).")
+
+for index, sibling in enumerate(files, start=1):
+    name = sibling.rfilename
+    size = fmt_size(getattr(sibling, "size", 0))
+    start_pct = 5 + int((index - 1) * 75 / total)
+    done_pct = 5 + int(index * 75 / total)
+    emit(start_pct, f"Downloading {index}/{total}: {name} ({size})")
+    hf_hub_download(repo_id=model, filename=name)
+    emit(done_pct, f"Downloaded {index}/{total}: {name}")
+
+emit(85, "Warming model in Python...")
+from sentence_transformers import CrossEncoder
+CrossEncoder(model)
+emit(100, f"Model is ready: {model}")
+print("ok", flush=True)
+'''
+        try:
+            creationflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+            proc = subprocess.Popen(
+                [python_exe, "-c", script, self.model_name],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                creationflags=creationflags,
+            )
+            recent_output = []
+            start = time.time()
+            while True:
+                if time.time() - start > 1800:
+                    proc.kill()
+                    self.finished_signal.emit(False, "Download/warmup timed out after 30 minutes.")
+                    return
+                line = proc.stdout.readline() if proc.stdout else ""
+                if line:
+                    stripped = line.strip()
+                    if stripped:
+                        recent_output.append(stripped)
+                        recent_output = recent_output[-40:]
+                    if stripped == "ok":
+                        continue
+                    try:
+                        event = json.loads(stripped)
+                        self.progress_signal.emit(
+                            int(event.get("percent", 0)),
+                            str(event.get("message") or ""),
+                        )
+                    except Exception:
+                        self.progress_signal.emit(0, stripped)
+                    continue
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.1)
+
+            if proc.returncode == 0:
+                self.finished_signal.emit(True, f"Model is ready: {self.model_name}")
+                return
+            detail = "\n".join(recent_output).strip() or "Unknown error"
+            self.finished_signal.emit(False, detail[-1200:])
+        except Exception as exc:
+            self.finished_signal.emit(False, str(exc))
+
+
+class RerankModelVerifyWorker(QThread):
+    """Verify a selected Cross-Encoder model from local cache only."""
+
+    finished_signal = pyqtSignal(bool, str, str)
+
+    def __init__(self, python_path, model_name):
+        super().__init__()
+        self.python_path = python_path
+        self.model_name = model_name
+
+    def run(self):
+        import os
+        import subprocess
+        import sys
+
+        python_exe = _resolve_external_python_exe(self.python_path) if self.python_path else sys.executable
+        if not python_exe:
+            self.finished_signal.emit(False, self.model_name, "Select a valid Python first.")
+            return
+
+        script = r'''
+import os
+import sys
+
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+from sentence_transformers import CrossEncoder
+
+model = sys.argv[1]
+CrossEncoder(model)
+print("ok", flush=True)
+'''
+        env = os.environ.copy()
+        env["HF_HUB_OFFLINE"] = "1"
+        env["TRANSFORMERS_OFFLINE"] = "1"
+        try:
+            creationflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+            proc = subprocess.run(
+                [python_exe, "-c", script, self.model_name],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env,
+                timeout=180,
+                creationflags=creationflags,
+            )
+            output = (proc.stdout or "").strip()
+            if proc.returncode == 0 and "ok" in output:
+                self.finished_signal.emit(True, self.model_name, f"Model is ready in local cache: {self.model_name}")
+                return
+            self.finished_signal.emit(False, self.model_name, (output or "Model is not available in local cache.")[-1200:])
+        except subprocess.TimeoutExpired:
+            self.finished_signal.emit(False, self.model_name, "Cache-only verification timed out after 180 seconds.")
+        except Exception as exc:
+            self.finished_signal.emit(False, self.model_name, str(exc))
+
 ANSWER_KEY_PROVIDER_PREFIXES = (
     ("sk-ant-", "anthropic"),
     ("sk-or-", "openrouter"),
@@ -95,6 +330,12 @@ EMBEDDING_KEY_PROVIDER_PREFIXES = (
     ("co-", "Cohere"),
     ("sk-", "OpenAI"),
 )
+
+_note_type_deck_data_cache = {
+    "collection_key": None,
+    "deck_names": None,
+    "deck_note_counts": None,
+}
 
 
 class SettingsDialog(QDialog):
@@ -128,6 +369,14 @@ class SettingsDialog(QDialog):
 
 
         self._rerank_check_done = False  # defer rerank check until after show
+        self._rerank_available = False
+        self._rerank_model_ready = False
+        self._rerank_model_ready_name = ""
+        self._rerank_verify_worker = None
+        self._rerank_verify_token = None
+        self._rerank_model_checking = False
+        self._rerank_model_checking_name = ""
+        self._rerank_model_verify_message = ""
 
 
 
@@ -316,6 +565,8 @@ class SettingsDialog(QDialog):
 
                 self._rerank_available = available
 
+                self._rerank_model_ready = bool(getattr(self, "_rerank_model_ready", False))
+
                 cb = getattr(self, "enable_rerank_cb", None)
 
                 if cb is not None and not sip.isdeleted(cb):
@@ -331,6 +582,8 @@ class SettingsDialog(QDialog):
                     self._update_rerank_status_ui()
 
                 self._rerank_check_worker = None
+                if available:
+                    self._verify_selected_rerank_model_cache()
 
             except (RuntimeError, AttributeError, ImportError):
 
@@ -769,6 +1022,9 @@ class SettingsDialog(QDialog):
         self.local_llm_url = QLineEdit()
 
         self.local_llm_url.setPlaceholderText("http://localhost:11434/v1 (Ollama) or http://localhost:1234/v1 (LM Studio)")
+        self.local_llm_url.setToolTip(
+            "URL for your local answer server. Use an OpenAI-compatible endpoint such as Ollama, LM Studio, or Jan."
+        )
 
         local_server_layout.addWidget(settings_field_row(theme, self.local_llm_url, "Server URL:"))
 
@@ -858,6 +1114,9 @@ class SettingsDialog(QDialog):
 
 
         self.embedding_same_checkbox = QCheckBox("Use same provider as answering")
+        self.embedding_same_checkbox.setToolTip(
+            "Use the answer provider for embeddings when compatible. Turn off to choose a separate embedding provider."
+        )
 
         self.embedding_same_checkbox.setChecked(True)
 
@@ -890,6 +1149,9 @@ class SettingsDialog(QDialog):
         self.embedding_strategy_combo.addItem("\U0001f4bb Local Server (Ollama, LM Studio, Jan)", "local")
 
         self.embedding_strategy_combo.addItem("\u2601\ufe0f Cloud API (Voyage, OpenAI, Cohere)", "cloud")
+        self.embedding_strategy_combo.setToolTip(
+            "Choose where semantic-search embeddings are created: local server for privacy, or cloud API for hosted embedding models."
+        )
 
         embedding_independent_layout.addWidget(settings_field_row(theme, self.embedding_strategy_combo, "Embedding with:"))
 
@@ -904,6 +1166,9 @@ class SettingsDialog(QDialog):
         self.embedding_local_url_input = QLineEdit()
 
         self.embedding_local_url_input.setPlaceholderText("http://localhost:11434/v1")
+        self.embedding_local_url_input.setToolTip(
+            "URL for your local embedding server. It must expose an /embeddings-compatible endpoint."
+        )
 
         embedding_local_layout.addWidget(settings_field_row(theme, self.embedding_local_url_input, "Server URL:"))
 
@@ -1665,39 +1930,32 @@ class SettingsDialog(QDialog):
 
 
 
-        nt_info = QLabel(
-
-
-
-            "\U0001F4CB Choose which note types and decks to search. Select fields to search per note type. "
-
-
-
-            "Tip: For shared or public decks, select the note types and decks you want; you can leave all selected to search everything."
-
-
-
-        )
-
-
-
-        nt_info.setWordWrap(True)
-
-
-
-        nt_info.setStyleSheet(f"font-size: 11px; color: {theme['subtext']}; margin-bottom: 6px;")
-
-
-
-        nt_info.setStyleSheet(f"font-size: 17px; font-weight: bold; color: {theme['text']}; margin-bottom: 6px;")
-
-
-
-        nt_info.setWordWrap(True)
+        nt_info = QLabel("\U0001F4CB Note types, decks, and fields")
+        nt_info.setStyleSheet(settings_text_style(theme, "section_heading"))
 
 
 
         nt_main.addWidget(nt_info)
+
+        nt_hint = QLabel(
+            "Choose what search can see. Leave everything selected to search the full collection."
+        )
+        nt_hint.setWordWrap(True)
+        nt_hint.setStyleSheet(settings_text_style(theme, "subtle"))
+        nt_main.addWidget(nt_hint)
+
+        self.note_type_loading_status = QLabel("")
+        self.note_type_loading_status.setWordWrap(True)
+        self.note_type_loading_status.setStyleSheet(settings_text_style(theme, "subtle"))
+        self.note_type_loading_status.hide()
+        nt_main.addWidget(self.note_type_loading_status)
+
+        self.note_type_loading_bar = QProgressBar()
+        self.note_type_loading_bar.setRange(0, 0)
+        self.note_type_loading_bar.setTextVisible(False)
+        self.note_type_loading_bar.setMaximumHeight(8)
+        self.note_type_loading_bar.hide()
+        nt_main.addWidget(self.note_type_loading_bar)
 
 
 
@@ -2173,7 +2431,7 @@ class SettingsDialog(QDialog):
 
 
 
-        self.count_notes_btn = QPushButton("\U0001F4CA Count notes (with current settings)")
+        self.count_notes_btn = QPushButton("\U0001F4CA Preview coverage")
 
 
 
@@ -2182,6 +2440,16 @@ class SettingsDialog(QDialog):
 
 
         action_row.addWidget(self.count_notes_btn)
+
+        self.review_ineligible_btn = QPushButton("Review excluded notes")
+
+        self.review_ineligible_btn.setToolTip("Open notes excluded by the current deck, note type, and field filters.")
+
+        self.review_ineligible_btn.setStyleSheet(settings_button_style(theme, "muted"))
+
+        self.review_ineligible_btn.clicked.connect(self._review_ineligible_notes)
+
+        action_row.addWidget(self.review_ineligible_btn)
 
 
 
@@ -2325,23 +2593,8 @@ class SettingsDialog(QDialog):
 
 
 
-        # Defer heavy operations to avoid lag (with timing logs)
-
-
-
-        QTimer.singleShot(50, lambda: self._populate_note_type_lists_with_timing())
-
-
-
-        QTimer.singleShot(100, lambda: self._populate_fields_by_note_type_with_timing())
-
-
-
-        QTimer.singleShot(150, lambda: self._populate_decks_list_with_timing())
-
-
-
-        QTimer.singleShot(200, lambda: self._refresh_preset_combos_with_timing())
+        self._note_types_tab = nt_tab
+        self._note_type_lists_loaded = False
 
 
 
@@ -2466,18 +2719,6 @@ class SettingsDialog(QDialog):
 
         index_btns.addWidget(self.create_embedding_btn)
 
-        self.review_ineligible_btn = QPushButton("Review Excluded Notes")
-
-        self.review_ineligible_btn.setToolTip("Open notes excluded from embeddings by the current deck, note type, and field filters.")
-
-        self.review_ineligible_btn.setStyleSheet(settings_button_style(theme, "muted"))
-
-        self.review_ineligible_btn.clicked.connect(self._review_ineligible_notes)
-
-        index_btns.addWidget(self.review_ineligible_btn)
-
-
-
         index_layout.addLayout(index_btns)
 
         search_layout.addWidget(index_zone)
@@ -2501,6 +2742,9 @@ class SettingsDialog(QDialog):
         self.search_method_combo.addItem("Hybrid (RRF)", "hybrid")
 
         self.search_method_combo.addItem("Embedding Only", "embedding")
+        self.search_method_combo.setToolTip(
+            "Choose how notes are retrieved: keyword, semantic embeddings, hybrid, or keyword with re-ranking."
+        )
 
         self.search_method_combo.currentIndexChanged.connect(self._on_search_method_changed)
 
@@ -2510,31 +2754,36 @@ class SettingsDialog(QDialog):
 
 
 
-        # --- 3. AI-ASSISTED RETRIEVAL ---
+        # --- AI RETRIEVAL ---
 
-        ai_retrieval_section = CollapsibleSection("AI-Assisted Retrieval", is_expanded=False)
+        ai_retrieval_section = CollapsibleSection("AI Retrieval", is_expanded=False)
 
         self.enable_query_expansion_cb = QCheckBox("Query Expansion (AI adds medical synonyms)")
+        self.enable_query_expansion_cb.setToolTip(
+            "Use AI to add related medical terms and synonyms before searching. Can improve recall."
+        )
 
         ai_retrieval_section.addWidget(settings_field_row(theme, self.enable_query_expansion_cb))
 
         self.use_ai_generic_term_detection_cb = QCheckBox("Filter Filler Words (AI detects generic terms)")
+        self.use_ai_generic_term_detection_cb.setToolTip(
+            "Use AI to identify generic filler terms so they do not dominate search ranking."
+        )
 
         ai_retrieval_section.addWidget(settings_field_row(theme, self.use_ai_generic_term_detection_cb))
 
         self.enable_hyde_cb = QCheckBox("HyDE (AI generates hypothetical document first)")
+        self.enable_hyde_cb.setToolTip(
+            "Generate a hypothetical answer/document first, then search for notes similar to it."
+        )
 
         self.enable_hyde_row = settings_field_row(theme, self.enable_hyde_cb)
 
         ai_retrieval_section.addWidget(self.enable_hyde_row)
 
-        search_layout.addWidget(ai_retrieval_section)
+        # --- 3. CLINICAL ACCURACY ---
 
-
-
-        # --- 4. CLINICAL ACCURACY TUNING ---
-
-        accuracy_section = CollapsibleSection("Clinical Accuracy Tuning", is_expanded=False)
+        accuracy_section = CollapsibleSection("Clinical Accuracy", is_expanded=False)
 
         accuracy_layout = QVBoxLayout()
 
@@ -2545,18 +2794,25 @@ class SettingsDialog(QDialog):
         self.min_relevance_spin = QSpinBox()
 
         self.min_relevance_spin.setRange(15, 75)
+        self.min_relevance_spin.setToolTip(
+            "Minimum score required for a note to appear. Higher = stricter results; lower = broader results."
+        )
 
         accuracy_layout.addWidget(settings_field_row(theme, self.min_relevance_spin, "Minimum Relevance Threshold:"))
 
         self.max_results_spin = QSpinBox()
 
         self.max_results_spin.setRange(5, 50)
+        self.max_results_spin.setToolTip("Maximum number of notes shown in the final search results.")
 
-        accuracy_layout.addWidget(settings_field_row(theme, self.max_results_spin, "Max Results Pool:"))
+        accuracy_layout.addWidget(settings_field_row(theme, self.max_results_spin, "Max Results:"))
 
         self.hybrid_weight_spin = QSpinBox()
 
         self.hybrid_weight_spin.setRange(0, 100)
+        self.hybrid_weight_spin.setToolTip(
+            "For Hybrid search, controls how much ranking comes from semantic embeddings versus keyword matching. Higher = more semantic; lower = more keyword-based."
+        )
 
         self.hybrid_weight_label = QLabel("Embedding Weight:")
 
@@ -2575,10 +2831,11 @@ class SettingsDialog(QDialog):
 
         search_layout.addWidget(accuracy_section)
 
+        search_layout.addWidget(ai_retrieval_section)
 
-        # --- 5. RETRIEVAL ENGINE ---
+        # --- RETRIEVAL ENGINE ---
 
-        retrieval_section = CollapsibleSection("Retrieval Engine (Advanced)", is_expanded=False)
+        retrieval_section = CollapsibleSection("Retrieval Engine", is_expanded=False)
         retrieval_layout = QVBoxLayout()
         retrieval_layout.setContentsMargins(0, 0, 0, 0)
         retrieval_layout.setSpacing(8)
@@ -2626,11 +2883,11 @@ class SettingsDialog(QDialog):
 
         self.retrieval_dirty_label = QLabel("Changes apply to next search")
         self.retrieval_dirty_label.setStyleSheet(settings_text_style(theme, "subtle"))
-        self.retrieval_dirty_label.hide()
-        retrieval_layout.addWidget(settings_field_row(theme, self.retrieval_dirty_label))
+        self.retrieval_dirty_row = settings_field_row(theme, self.retrieval_dirty_label)
+        self.retrieval_dirty_row.hide()
+        retrieval_layout.addWidget(self.retrieval_dirty_row)
 
         retrieval_section.addLayout(retrieval_layout)
-        search_layout.addWidget(retrieval_section)
 
         self.retrieval_version_combo.currentIndexChanged.connect(lambda *_: self._update_retrieval_v2_controls(mark_dirty=True))
         self.keyword_scoring_combo.currentIndexChanged.connect(lambda *_: self._update_retrieval_v2_controls(mark_dirty=True))
@@ -2639,18 +2896,53 @@ class SettingsDialog(QDialog):
         self.mmr_candidate_pool_spin.valueChanged.connect(lambda *_: self._update_retrieval_v2_controls(mark_dirty=True))
 
 
-        # --- 6. RE-RANKING SECTION ---
+        # --- 4. RESULT RE-RANKING ---
 
-        rerank_section = CollapsibleSection("Re-Ranking (Advanced Accuracy)", is_expanded=False)
+        rerank_section = CollapsibleSection("Result Re-Ranking", is_expanded=False)
 
-        self.rerank_status_label = QLabel("Cross-Encoder: checking...")
+        self.rerank_status_label = QLabel("Cross-Encoder package: checking...")
         self.rerank_status_label.setStyleSheet(settings_text_style(theme, "subtle"))
         rerank_section.addWidget(settings_field_row(theme, self.rerank_status_label))
+
+        self.rerank_model_status_label = QLabel("Selected model: not verified")
+        self.rerank_model_status_label.setStyleSheet(settings_status_label_style(theme, "warning"))
+        rerank_section.addWidget(settings_field_row(theme, self.rerank_model_status_label))
 
         rerank_hint = QLabel("Recommended: external Python avoids Anki torch/DLL issues.")
         rerank_hint.setWordWrap(True)
         rerank_hint.setStyleSheet(settings_text_style(theme, "subtle"))
         rerank_section.addWidget(settings_field_row(theme, rerank_hint))
+
+        self.rerank_model_combo = QComboBox()
+        self.rerank_model_combo.setEditable(True)
+        for label, model_id in RERANK_MODEL_PRESETS:
+            self.rerank_model_combo.addItem(f"{model_id} ({label})", model_id)
+        self.rerank_model_combo.setCurrentText(DEFAULT_RERANK_MODEL)
+        self.rerank_model_combo.setToolTip("Cross-Encoder model used to rerank the top search results.")
+        self.rerank_model_combo.currentTextChanged.connect(self._on_rerank_model_changed)
+        rerank_section.addWidget(settings_field_row(theme, self.rerank_model_combo, "Cross-Encoder model:"))
+
+        rerank_model_hint = QLabel(
+            "Use Verify / Download selected model before searching. Search uses cached models only, so rerank timeouts cover scoring rather than model downloads."
+        )
+        rerank_model_hint.setWordWrap(True)
+        rerank_model_hint.setStyleSheet(settings_text_style(theme, "subtle"))
+        rerank_section.addWidget(settings_field_row(theme, rerank_model_hint))
+
+        self.rerank_top_k_spin = QSpinBox()
+        self.rerank_top_k_spin.setRange(RERANK_TOP_K_MIN, RERANK_TOP_K_MAX)
+        self.rerank_top_k_spin.setValue(RERANK_TOP_K_DEFAULT)
+        self.rerank_top_k_spin.setToolTip("How many top results the Cross-Encoder reranks before final display.")
+        rerank_section.addWidget(settings_field_row(theme, self.rerank_top_k_spin, "Rerank top results:"))
+
+        self.rerank_timeout_spin = QSpinBox()
+        self.rerank_timeout_spin.setRange(RERANK_TIMEOUT_SECONDS_MIN, RERANK_TIMEOUT_SECONDS_MAX)
+        self.rerank_timeout_spin.setValue(RERANK_TIMEOUT_SECONDS_DEFAULT)
+        self.rerank_timeout_spin.setSuffix(" sec")
+        self.rerank_timeout_spin.setToolTip(
+            "Maximum time for scoring already-downloaded models during search. Downloads are handled by the button below."
+        )
+        rerank_section.addWidget(settings_field_row(theme, self.rerank_timeout_spin, "Rerank scoring timeout:"))
 
         self.python_path_widget = QWidget()
         python_path_layout = QVBoxLayout(self.python_path_widget)
@@ -2683,6 +2975,11 @@ class SettingsDialog(QDialog):
         self.check_rerank_btn.clicked.connect(self._on_check_rerank_again)
         action_row.addWidget(self.check_rerank_btn)
 
+        self.download_rerank_model_btn = QPushButton("Verify / Download selected model")
+        self.download_rerank_model_btn.setToolTip("Checks the local cache, downloads missing files, then warms the selected Cross-Encoder model.")
+        self.download_rerank_model_btn.clicked.connect(self._on_download_rerank_model)
+        action_row.addWidget(self.download_rerank_model_btn)
+
         self.install_anki_python_btn = QPushButton("Try Anki Python fallback")
         self.install_anki_python_btn.setToolTip("Fallback only: external Python is recommended for Cross-Encoder setup.")
         self.install_anki_python_btn.clicked.connect(lambda: install_dependencies(python_exe=None))
@@ -2690,17 +2987,35 @@ class SettingsDialog(QDialog):
 
         python_path_layout.addWidget(settings_field_row(theme, layout=action_row))
 
+        self.rerank_download_progress = QProgressBar()
+        self.rerank_download_progress.setRange(0, 100)
+        self.rerank_download_progress.setValue(0)
+        self.rerank_download_progress.hide()
+        python_path_layout.addWidget(self.rerank_download_progress)
+
+        self.rerank_download_status_label = QLabel("")
+        self.rerank_download_status_label.setWordWrap(True)
+        self.rerank_download_status_label.setStyleSheet(settings_text_style(theme, "subtle"))
+        self.rerank_download_status_label.hide()
+        python_path_layout.addWidget(settings_field_row(theme, self.rerank_download_status_label))
+
         rerank_section.addWidget(self.python_path_widget)
         self.python_path_widget.setVisible(True)
 
         self.enable_rerank_cb = QCheckBox("Improve result order with Cross-Encoder")
         self.enable_rerank_cb.setEnabled(False)
-        rerank_section.addWidget(settings_field_row(theme, self.enable_rerank_cb))
+        self.enable_rerank_row = settings_field_row(theme, self.enable_rerank_cb)
+        rerank_section.addWidget(self.enable_rerank_row)
 
         self.use_context_boost_cb = QCheckBox("Context-Aware Ranking")
+        self.use_context_boost_cb.setToolTip(
+            "Boost notes that match important surrounding context in the query, not just isolated keywords."
+        )
         rerank_section.addWidget(settings_field_row(theme, self.use_context_boost_cb))
 
         search_layout.addWidget(rerank_section)
+
+        search_layout.addWidget(retrieval_section)
 
 
 
@@ -3068,6 +3383,8 @@ class SettingsDialog(QDialog):
 
         self._settings_tabs = tabs
 
+        tabs.currentChanged.connect(self._on_settings_tab_changed)
+
 
 
         scroll_content.installEventFilter(self)
@@ -3083,6 +3400,10 @@ class SettingsDialog(QDialog):
 
 
         self._apply_settings_control_sizing(tabs)
+
+
+
+        sync_setting_row_tooltips(tabs)
 
 
 
@@ -3405,6 +3726,8 @@ class SettingsDialog(QDialog):
 
         self._safe_set_checked(getattr(self, "use_dynamic_batch_size_cb", None), search_config.get('use_dynamic_batch_size', True))
 
+        rerank_config = get_rerank_config(search_config)
+
 
 
         # Value setters (with try/except guards)
@@ -3422,6 +3745,28 @@ class SettingsDialog(QDialog):
             if hasattr(self, "hybrid_weight_spin"):
 
                 self.hybrid_weight_spin.setValue(max(0, min(100, search_config.get('hybrid_embedding_weight', 40))))
+
+            if hasattr(self, "rerank_model_combo"):
+
+                model = rerank_config.get('rerank_model', DEFAULT_RERANK_MODEL)
+
+                idx = self.rerank_model_combo.findData(model)
+
+                if idx >= 0:
+
+                    self.rerank_model_combo.setCurrentIndex(idx)
+
+                else:
+
+                    self.rerank_model_combo.setCurrentText(model)
+
+            if hasattr(self, "rerank_top_k_spin"):
+
+                self.rerank_top_k_spin.setValue(rerank_config.get('rerank_top_k', RERANK_TOP_K_DEFAULT))
+
+            if hasattr(self, "rerank_timeout_spin"):
+
+                self.rerank_timeout_spin.setValue(rerank_config.get('rerank_timeout_seconds', RERANK_TIMEOUT_SECONDS_DEFAULT))
 
             if hasattr(self, "rerank_python_path_input"):
 
@@ -3491,6 +3836,8 @@ class SettingsDialog(QDialog):
             if hasattr(self, "retrieval_dirty_label"):
 
                 self.retrieval_dirty_label.hide()
+                if hasattr(self, "retrieval_dirty_row"):
+                    self.retrieval_dirty_row.hide()
 
         except Exception as e:
 
@@ -4355,6 +4702,146 @@ class SettingsDialog(QDialog):
 
     # --- Note Type, Field, And Deck Filters ---
 
+    def _set_note_type_loading_status(self, message="", busy=False):
+        label = getattr(self, "note_type_loading_status", None)
+        bar = getattr(self, "note_type_loading_bar", None)
+
+        try:
+            if label is not None:
+                label.setText(message or "")
+                label.setVisible(bool(message))
+            if bar is not None:
+                bar.setVisible(bool(busy))
+            if message:
+                log_debug(f"Note Types loading status: {message}")
+        except RuntimeError:
+            pass
+
+    def _collection_cache_key(self):
+        try:
+            col = getattr(mw, "col", None)
+            if col is None:
+                return None
+            path = getattr(col, "path", None)
+            if callable(path):
+                return path()
+            return path or id(col)
+        except Exception:
+            return None
+
+    def _get_cached_deck_data(self, force_refresh=False):
+        global _note_type_deck_data_cache
+
+        collection_key = self._collection_cache_key()
+        cache_matches = (
+            _note_type_deck_data_cache.get("collection_key") == collection_key
+            and _note_type_deck_data_cache.get("deck_names") is not None
+            and _note_type_deck_data_cache.get("deck_note_counts") is not None
+        )
+
+        if cache_matches and not force_refresh:
+            return (
+                dict(_note_type_deck_data_cache.get("deck_note_counts") or {}),
+                list(_note_type_deck_data_cache.get("deck_names") or []),
+                True,
+            )
+
+        counts = get_notes_count_per_deck()
+        deck_names = get_deck_names()
+        _note_type_deck_data_cache = {
+            "collection_key": collection_key,
+            "deck_names": list(deck_names),
+            "deck_note_counts": dict(counts),
+        }
+        return dict(counts), list(deck_names), False
+
+    def _invalidate_note_type_deck_cache(self):
+        global _note_type_deck_data_cache
+        _note_type_deck_data_cache = {
+            "collection_key": None,
+            "deck_names": None,
+            "deck_note_counts": None,
+        }
+
+    def _on_settings_tab_changed(self, index):
+        """Lazy-load expensive note/deck lists only when that tab is opened."""
+        try:
+            tabs = getattr(self, "_settings_tabs", None)
+            note_types_tab = getattr(self, "_note_types_tab", None)
+            if tabs is not None and note_types_tab is not None and tabs.widget(index) == note_types_tab:
+                self._schedule_note_type_lists_load()
+        except Exception as e:
+            log_debug(f"Error handling settings tab change: {e}")
+
+    def _schedule_note_type_lists_load(self, force=False):
+        if not force and getattr(self, "_note_type_lists_loaded", False):
+            return
+
+        self._note_type_lists_loaded = True
+        cache_ready = (
+            _note_type_deck_data_cache.get("collection_key") == self._collection_cache_key()
+            and _note_type_deck_data_cache.get("deck_names") is not None
+            and _note_type_deck_data_cache.get("deck_note_counts") is not None
+        )
+        if cache_ready and not force:
+            self._set_note_type_loading_status(
+                "Loading note types and fields. Reusing deck counts from this Anki session.",
+                busy=False,
+            )
+        else:
+            self._set_note_type_loading_status(
+                "Loading note types, fields, and deck counts. Deck counts can take a while on large collections.",
+                busy=True,
+            )
+        QTimer.singleShot(50, lambda: self._populate_note_type_tab_with_timing(force_refresh=force))
+
+    def _populate_note_type_tab_with_timing(self, force_refresh=False):
+        containers = [
+            getattr(self, "note_types_table", None),
+            getattr(self, "fields_by_note_type_scroll", None),
+            getattr(self, "decks_list", None),
+        ]
+        containers = [widget for widget in containers if widget is not None]
+        try:
+            import time
+
+            start = time.time()
+            for widget in containers:
+                widget.setUpdatesEnabled(False)
+            self._populate_note_type_lists()
+            self._populate_fields_by_note_type()
+            used_cache = self._populate_decks_list(force_refresh=force_refresh)
+            self._refresh_preset_combos()
+            try:
+                cfg = load_config()
+                self._apply_note_type_config(cfg.get('note_type_filter', {}))
+            except Exception as e:
+                log_debug(f"Error applying note_type_filter after Note Types tab populate: {e}")
+            elapsed = time.time() - start
+            log_debug(f"  [Timing] _populate_note_type_tab(): {elapsed:.3f}s")
+            status = (
+                f"Note type and deck data loaded from cache in {elapsed:.1f}s."
+                if used_cache
+                else f"Note type and deck data loaded in {elapsed:.1f}s."
+            )
+            self._set_note_type_loading_status(status, busy=False)
+            QTimer.singleShot(3500, lambda: self._set_note_type_loading_status("", busy=False))
+        except RuntimeError:
+            pass
+        except Exception as e:
+            log_debug(f"Error in _populate_note_type_tab_with_timing: {e}")
+            self._set_note_type_loading_status(
+                "Could not load note type and deck data. Use Refresh lists to try again.",
+                busy=False,
+            )
+        finally:
+            try:
+                for widget in containers:
+                    widget.setUpdatesEnabled(True)
+                    widget.update()
+            except RuntimeError:
+                pass
+
     def _populate_note_type_lists_with_timing(self):
 
 
@@ -4691,7 +5178,11 @@ class SettingsDialog(QDialog):
 
 
 
-                gb = CollapsibleSection(f"{model_name}  ({count} notes)", is_expanded=is_included)
+                gb = CollapsibleSection(
+                    f"{model_name}  ({count} notes)",
+                    parent=self.fields_by_note_type_inner,
+                    is_expanded=is_included,
+                )
 
 
 
@@ -4703,7 +5194,7 @@ class SettingsDialog(QDialog):
 
 
 
-                    cb = QCheckBox(fn)
+                    cb = QCheckBox(fn, gb)
 
 
 
@@ -4835,7 +5326,7 @@ class SettingsDialog(QDialog):
 
 
 
-    def _populate_decks_list_with_timing(self):
+    def _populate_decks_list_with_timing(self, force_refresh=False):
 
 
 
@@ -4865,9 +5356,25 @@ class SettingsDialog(QDialog):
 
             start = time.time()
 
+            cache_ready = (
+                _note_type_deck_data_cache.get("collection_key") == self._collection_cache_key()
+                and _note_type_deck_data_cache.get("deck_names") is not None
+                and _note_type_deck_data_cache.get("deck_note_counts") is not None
+            )
+            if cache_ready and not force_refresh:
+                self._set_note_type_loading_status(
+                    "Loading decks from this Anki session's cached counts.",
+                    busy=False,
+                )
+            else:
+                self._set_note_type_loading_status(
+                    "Loading deck counts. This can take a while on large collections or many subdecks.",
+                    busy=True,
+                )
 
 
-            self._populate_decks_list()
+
+            used_cache = self._populate_decks_list(force_refresh=force_refresh)
 
 
 
@@ -4905,6 +5412,14 @@ class SettingsDialog(QDialog):
 
                 log_debug(f"Error re-applying note_type_filter after deck populate: {e}")
 
+            status = (
+                f"Deck data loaded from cache in {elapsed:.1f}s."
+                if used_cache
+                else f"Deck data loaded in {elapsed:.1f}s."
+            )
+            self._set_note_type_loading_status(status, busy=False)
+            QTimer.singleShot(3500, lambda: self._set_note_type_loading_status("", busy=False))
+
 
 
         except RuntimeError:
@@ -4924,6 +5439,10 @@ class SettingsDialog(QDialog):
 
 
             log_debug(f"Error in _populate_decks_list_with_timing: {e}")
+            self._set_note_type_loading_status(
+                "Could not load deck data. Use Refresh lists to try again.",
+                busy=False,
+            )
 
 
 
@@ -4931,7 +5450,7 @@ class SettingsDialog(QDialog):
 
 
 
-    def _populate_decks_list(self):
+    def _populate_decks_list(self, force_refresh=False):
 
 
 
@@ -4983,43 +5502,21 @@ class SettingsDialog(QDialog):
 
 
 
-            counts_start = time.time()
+            deck_data_start = time.time()
 
 
 
-            counts = get_notes_count_per_deck()
+            counts, deck_names, used_cache = self._get_cached_deck_data(force_refresh=force_refresh)
 
 
 
-            counts_elapsed = time.time() - counts_start
+            deck_data_elapsed = time.time() - deck_data_start
 
 
 
-            log_debug(f"  [Timing] get_notes_count_per_deck(): {counts_elapsed:.3f}s")
-
-
-
-
-
-
-
-            # Get deck hierarchy and card counts
-
-
-
-            deck_names_start = time.time()
-
-
-
-            deck_names = get_deck_names()
-
-
-
-            deck_names_elapsed = time.time() - deck_names_start
-
-
-
-            log_debug(f"  [Timing] get_deck_names(): {deck_names_elapsed:.3f}s")
+            log_debug(
+                f"  [Timing] deck data ({'cache' if used_cache else 'fresh'}): {deck_data_elapsed:.3f}s"
+            )
 
 
 
@@ -5446,6 +5943,7 @@ class SettingsDialog(QDialog):
 
 
             log_debug(f"  [Timing] _populate_decks_list(): {deck_elapsed:.3f}s")
+            return used_cache
 
 
 
@@ -5461,7 +5959,7 @@ class SettingsDialog(QDialog):
 
 
 
-            pass
+            return False
 
 
 
@@ -5478,6 +5976,7 @@ class SettingsDialog(QDialog):
 
 
             log_debug(traceback.format_exc())
+            return False
 
 
 
@@ -6630,11 +7129,78 @@ class SettingsDialog(QDialog):
 
 
 
-        c = count_notes_matching_config(ntf)
+        audit = analyze_note_eligibility(ntf)
+        eligible_ids = set(audit.get("eligible_note_ids") or [])
+        eligible_count = audit.get("eligible_count", 0)
+        excluded_count = max(0, audit.get("total_notes", 0) - eligible_count)
 
+        config = load_config()
+        config["note_type_filter"] = ntf
+        config = self._config_with_current_answer_provider(config)
+        sc = dict(config.get("search_config") or {})
+        sc.update(self._save_embedding_settings())
+        config["search_config"] = sc
+        current_engine_id = get_embedding_engine_id(config)
 
+        db_path = get_embeddings_db_path()
+        current_rows = 0
+        current_distinct = 0
+        duplicate_extra_rows = 0
+        indexed_eligible = 0
+        indexed_outside_filters = 0
+        missing_count = eligible_count
+        engine_lines = []
+        db_status = "No embeddings database found."
 
-        showInfo(f"With current settings, about {c} notes would be searched.")
+        if os.path.exists(db_path):
+            try:
+                conn = sqlite3.connect(db_path, timeout=10)
+                try:
+                    db_status = f"Database: {os.path.basename(db_path)}"
+                    per_note_counts = {}
+                    for note_id, row_count in conn.execute(
+                        "SELECT note_id, COUNT(*) FROM embeddings WHERE engine_id = ? GROUP BY note_id",
+                        (current_engine_id,),
+                    ):
+                        per_note_counts[int(note_id)] = int(row_count)
+                    current_rows = sum(per_note_counts.values())
+                    current_distinct = len(per_note_counts)
+                    duplicate_extra_rows = sum(max(0, count - 1) for count in per_note_counts.values())
+                    indexed_eligible = len(eligible_ids.intersection(per_note_counts.keys()))
+                    indexed_outside_filters = max(0, current_distinct - indexed_eligible)
+                    missing_count = max(0, eligible_count - indexed_eligible)
+                    for engine_id, rows, notes in conn.execute(
+                        "SELECT engine_id, COUNT(*), COUNT(DISTINCT note_id) FROM embeddings GROUP BY engine_id ORDER BY COUNT(*) DESC"
+                    ):
+                        engine_lines.append(f"- {engine_id}: {rows:,} rows / {notes:,} notes")
+                finally:
+                    conn.close()
+            except Exception as exc:
+                db_status = f"Could not read embeddings database: {exc}"
+
+        report = [
+            "Embedding Coverage Preview",
+            "",
+            "Current filters",
+            f"- Eligible notes: {eligible_count:,}",
+            f"- Excluded notes: {excluded_count:,}",
+            f"- Total notes in selected decks: {audit.get('total_notes', 0):,}",
+            "",
+            "Current embedding engine",
+            f"- {current_engine_id}",
+            f"- Indexed eligible notes: {indexed_eligible:,} / {eligible_count:,}",
+            f"- Missing eligible notes: {missing_count:,}",
+            f"- Duplicate extra rows: {duplicate_extra_rows:,}",
+            f"- Indexed notes outside current filters: {indexed_outside_filters:,}",
+            f"- Raw rows for this engine: {current_rows:,}",
+            f"- Distinct notes for this engine: {current_distinct:,}",
+            "",
+            db_status,
+        ]
+        if engine_lines:
+            report.extend(["", "All engines in database", *engine_lines])
+
+        showText("\n".join(report), title="Eligible Notes & Embedding Coverage")
 
 
 
@@ -6872,6 +7438,13 @@ class SettingsDialog(QDialog):
 
         """Repopulate all lists and preserve checked state where possible."""
 
+        self._note_type_lists_loaded = True
+        self._invalidate_note_type_deck_cache()
+        self._set_note_type_loading_status(
+            "Refreshing note types, fields, and deck counts. Deck counts can take a while on large collections.",
+            busy=True,
+        )
+
 
 
         checked_nt = [self.note_types_table.item(i, 0).data(Qt.ItemDataRole.UserRole) or self.note_types_table.item(i, 0).text().strip() for i in range(self.note_types_table.rowCount()) if self.note_types_table.item(i, 0) and self.note_types_table.item(i, 0).checkState() == Qt.CheckState.Checked]
@@ -6938,7 +7511,7 @@ class SettingsDialog(QDialog):
 
 
 
-        self._populate_decks_list()
+        self._populate_decks_list(force_refresh=True)
 
 
 
@@ -6971,6 +7544,9 @@ class SettingsDialog(QDialog):
 
 
         self._refresh_preset_combos()
+
+        self._set_note_type_loading_status("Note type and deck data refreshed.", busy=False)
+        QTimer.singleShot(3500, lambda: self._set_note_type_loading_status("", busy=False))
 
 
 
@@ -7611,6 +8187,27 @@ class SettingsDialog(QDialog):
 
                     'enable_rerank': self._safe_get_ui_value('enable_rerank_cb', current_sc.get('enable_rerank', False)),
 
+                    'rerank_model': self._selected_rerank_model(),
+
+                    'rerank_top_k': max(
+                        RERANK_TOP_K_MIN,
+                        min(
+                            RERANK_TOP_K_MAX,
+                            int(self._safe_get_ui_value('rerank_top_k_spin', current_sc.get('rerank_top_k', RERANK_TOP_K_DEFAULT))),
+                        ),
+                    ),
+
+                    'rerank_timeout_seconds': max(
+                        RERANK_TIMEOUT_SECONDS_MIN,
+                        min(
+                            RERANK_TIMEOUT_SECONDS_MAX,
+                            int(self._safe_get_ui_value(
+                                'rerank_timeout_spin',
+                                current_sc.get('rerank_timeout_seconds', RERANK_TIMEOUT_SECONDS_DEFAULT),
+                            )),
+                        ),
+                    ),
+
                     'use_context_boost': self._safe_get_ui_value('use_context_boost_cb', current_sc.get('use_context_boost', True)),
 
                     'min_relevance_percent': self._safe_get_ui_value('min_relevance_spin', current_sc.get('min_relevance_percent', 55)),
@@ -7695,6 +8292,8 @@ class SettingsDialog(QDialog):
                 if hasattr(self, "retrieval_dirty_label"):
 
                     self.retrieval_dirty_label.hide()
+                    if hasattr(self, "retrieval_dirty_row"):
+                        self.retrieval_dirty_row.hide()
 
                 showInfo("Settings saved successfully!")
 
@@ -7856,7 +8455,8 @@ class SettingsDialog(QDialog):
             'search_method_combo', 'max_results_spin', 'hybrid_weight_spin',
 
             'answer_provider_combo', 'answer_cloud_provider_combo', 'api_key_input',
-            'enable_rerank_cb', 'enable_hyde_cb',
+            'enable_rerank_cb', 'enable_hyde_cb', 'rerank_model_combo', 'rerank_top_k_spin',
+            'rerank_timeout_spin',
 
             'min_relevance_spin', 'layout_combo', 'answer_spacing_combo',
 
@@ -7931,6 +8531,30 @@ class SettingsDialog(QDialog):
 
                 self.min_relevance_spin.setValue(sc.get('min_relevance_percent', 55))
 
+            rerank_config = get_rerank_config(sc)
+
+            if hasattr(self, 'rerank_model_combo') and not sip.isdeleted(self.rerank_model_combo):
+
+                model = rerank_config.get('rerank_model', DEFAULT_RERANK_MODEL)
+
+                idx = self.rerank_model_combo.findData(model)
+
+                if idx >= 0:
+
+                    self.rerank_model_combo.setCurrentIndex(idx)
+
+                else:
+
+                    self.rerank_model_combo.setCurrentText(model)
+
+            if hasattr(self, 'rerank_top_k_spin') and not sip.isdeleted(self.rerank_top_k_spin):
+
+                self.rerank_top_k_spin.setValue(rerank_config.get('rerank_top_k', RERANK_TOP_K_DEFAULT))
+
+            if hasattr(self, 'rerank_timeout_spin') and not sip.isdeleted(self.rerank_timeout_spin):
+
+                self.rerank_timeout_spin.setValue(rerank_config.get('rerank_timeout_seconds', RERANK_TIMEOUT_SECONDS_DEFAULT))
+
             retrieval = get_retrieval_config(sc)
 
             if hasattr(self, 'retrieval_version_combo') and not sip.isdeleted(self.retrieval_version_combo):
@@ -7968,6 +8592,8 @@ class SettingsDialog(QDialog):
             if hasattr(self, 'retrieval_dirty_label') and not sip.isdeleted(self.retrieval_dirty_label):
 
                 self.retrieval_dirty_label.hide()
+                if hasattr(self, 'retrieval_dirty_row') and not sip.isdeleted(self.retrieval_dirty_row):
+                    self.retrieval_dirty_row.hide()
 
 
 
@@ -8162,6 +8788,7 @@ class SettingsDialog(QDialog):
         if hasattr(self, '_update_retrieval_v2_controls'): self._update_retrieval_v2_controls(mark_dirty=False)
 
         if hasattr(self, 'retrieval_dirty_label'): self.retrieval_dirty_label.hide()
+        if hasattr(self, 'retrieval_dirty_row'): self.retrieval_dirty_row.hide()
 
 
 
@@ -8795,15 +9422,24 @@ class SettingsDialog(QDialog):
 
 
 
-        base = "Re-ranks top 15 results with a cross-encoder for 10-30% better relevance.\n"
+        base = "Re-ranks top results with a cross-encoder for better relevance.\n"
 
 
 
-        if self._rerank_available:
+        model_ready = bool(getattr(self, "_rerank_model_ready", False))
+
+        if self._rerank_available and model_ready:
 
 
 
-            self.enable_rerank_cb.setToolTip(base + "Ready to use.")
+            self.enable_rerank_cb.setToolTip(base + "Package and selected model are ready to use.")
+
+        elif self._rerank_available:
+
+            self.enable_rerank_cb.setToolTip(
+                base + "Package is installed, but the selected model has not been verified. "
+                "Click Verify / Download selected model to verify it before searching."
+            )
 
 
 
@@ -8826,6 +9462,11 @@ class SettingsDialog(QDialog):
 
             )
 
+        apply_setting_row_tooltip(
+            getattr(self, "enable_rerank_row", None),
+            self.enable_rerank_cb.toolTip(),
+        )
+
 
 
 
@@ -8839,6 +9480,7 @@ class SettingsDialog(QDialog):
 
 
         label = getattr(self, "rerank_status_label", None)
+        model_label = getattr(self, "rerank_model_status_label", None)
         theme = _addon_theme()
 
 
@@ -8855,7 +9497,7 @@ class SettingsDialog(QDialog):
 
 
 
-            label.setText("Cross-Encoder: Ready")
+            label.setText("Cross-Encoder package: Ready")
 
 
 
@@ -8867,16 +9509,107 @@ class SettingsDialog(QDialog):
 
 
 
-            label.setText("Cross-Encoder: Needs setup")
+            label.setText("Cross-Encoder package: Needs setup")
 
 
 
             label.setStyleSheet(settings_status_label_style(theme, "warning"))
 
+        if model_label is not None:
+
+            model = self._selected_rerank_model() if hasattr(self, "_selected_rerank_model") else DEFAULT_RERANK_MODEL
+
+            if getattr(self, "_rerank_model_checking", False) and getattr(self, "_rerank_model_checking_name", "") == model:
+
+                model_label.setText(f"Selected model: checking local cache ({model})")
+
+                model_label.setStyleSheet(settings_status_label_style(theme, "warning"))
+
+            elif getattr(self, "_rerank_model_ready", False) and getattr(self, "_rerank_model_ready_name", "") == model:
+
+                model_label.setText(f"Selected model: Ready ({model})")
+
+                model_label.setStyleSheet(settings_status_label_style(theme, "success"))
+
+            else:
+
+                model_label.setText(f"Selected model: Not verified ({model})")
+
+                model_label.setStyleSheet(settings_status_label_style(theme, "warning"))
+
+            message = getattr(self, "_rerank_model_verify_message", "")
+            if message:
+                model_label.setToolTip(message)
+            else:
+                model_label.setToolTip("")
 
 
 
 
+
+
+
+    def _current_rerank_python_path(self):
+
+        return (self.rerank_python_path_input.text() or '').strip() or None
+
+
+    def _verify_selected_rerank_model_cache(self):
+
+        """Check whether the selected model can load from cache without downloading."""
+
+        if not getattr(self, "_rerank_available", False):
+
+            self._rerank_model_ready = False
+            self._rerank_model_ready_name = ""
+            self._rerank_model_checking = False
+            self._rerank_model_checking_name = ""
+            self._rerank_model_verify_message = "Cross-Encoder package is not ready yet."
+            self._update_rerank_status_ui()
+            return
+
+        model = self._selected_rerank_model()
+        python_path = self._current_rerank_python_path()
+        token = (python_path or "", model)
+
+        self._rerank_verify_token = token
+        self._rerank_model_ready = False
+        self._rerank_model_ready_name = ""
+        self._rerank_model_checking = True
+        self._rerank_model_checking_name = model
+        self._rerank_model_verify_message = "Checking the local model cache only. This will not download files."
+        self._update_rerank_tooltip()
+        self._update_rerank_status_ui()
+
+        self._rerank_verify_worker = RerankModelVerifyWorker(python_path, model)
+
+        def _on_done(success, checked_model, message):
+
+            try:
+
+                if self._rerank_verify_token != token or self._selected_rerank_model() != checked_model:
+                    return
+
+                self._rerank_model_checking = False
+                self._rerank_model_checking_name = ""
+                self._rerank_model_verify_message = message
+
+                if success:
+                    self._rerank_model_ready = True
+                    self._rerank_model_ready_name = checked_model
+                else:
+                    self._rerank_model_ready = False
+                    self._rerank_model_ready_name = ""
+
+                self._update_rerank_tooltip()
+                self._update_rerank_status_ui()
+                self._rerank_verify_worker = None
+
+            except Exception as exc:
+                log_debug(f"Rerank model cache verification completion error: {exc}")
+
+        self._rerank_verify_worker.finished_signal.connect(_on_done)
+        self._rerank_verify_worker.start()
 
 
     def _on_check_rerank_again(self):
@@ -8891,7 +9624,14 @@ class SettingsDialog(QDialog):
 
 
 
-        python_path = (self.rerank_python_path_input.text() or '').strip() or None
+        python_path = self._current_rerank_python_path()
+
+        self._rerank_model_ready = False
+
+        self._rerank_model_ready_name = ""
+        self._rerank_model_checking = False
+        self._rerank_model_checking_name = ""
+        self._rerank_model_verify_message = ""
 
 
 
@@ -8913,6 +9653,7 @@ class SettingsDialog(QDialog):
 
         if self._rerank_available:
 
+            self._verify_selected_rerank_model_cache()
 
 
             showInfo("sentence-transformers is available. Cross-Encoder re-ranking can be enabled.")
@@ -8970,6 +9711,212 @@ class SettingsDialog(QDialog):
 
 
 
+
+
+    def _selected_rerank_model(self):
+
+        combo = getattr(self, "rerank_model_combo", None)
+
+        if combo is None:
+
+            return DEFAULT_RERANK_MODEL
+
+        model = combo.currentData()
+
+        if model:
+
+            return str(model).strip()
+
+        return (combo.currentText() or DEFAULT_RERANK_MODEL).strip() or DEFAULT_RERANK_MODEL
+
+
+    def _on_rerank_model_changed(self, *_):
+
+        self._rerank_model_ready = False
+
+        self._rerank_model_ready_name = ""
+        self._rerank_model_verify_message = ""
+
+        self._update_rerank_tooltip()
+
+        self._update_rerank_status_ui()
+        if getattr(self, "_rerank_available", False):
+            self._verify_selected_rerank_model_cache()
+
+
+    def _on_download_rerank_model(self):
+
+        """Download and warm the selected Cross-Encoder model outside search."""
+
+        model = self._selected_rerank_model()
+
+        python_path = self._current_rerank_python_path()
+
+        self.download_rerank_model_btn.setEnabled(False)
+
+        self.download_rerank_model_btn.setText("Verifying...")
+
+        if hasattr(self, "rerank_download_progress"):
+
+            self.rerank_download_progress.setValue(0)
+
+            self.rerank_download_progress.show()
+
+        if hasattr(self, "rerank_download_status_label"):
+
+            self.rerank_download_status_label.setText("Checking local cache before downloading...")
+
+            self.rerank_download_status_label.show()
+
+        if hasattr(self, "rerank_status_label"):
+
+            self.rerank_status_label.setText("Cross-Encoder package: Ready" if getattr(self, "_rerank_available", False) else "Cross-Encoder package: checking...")
+
+        if hasattr(self, "rerank_model_status_label"):
+
+            self.rerank_model_status_label.setText(f"Selected model: verifying cache for {model}")
+
+        self._rerank_download_worker = RerankModelVerifyWorker(python_path, model)
+
+        def _on_verify_done(success, checked_model, message):
+
+            try:
+
+                if checked_model != model or self._selected_rerank_model() != model:
+
+                    self.download_rerank_model_btn.setEnabled(True)
+                    self.download_rerank_model_btn.setText("Verify / Download selected model")
+                    self._rerank_download_worker = None
+                    return
+
+                self._rerank_model_verify_message = message
+
+                if success:
+
+                    self._rerank_model_ready = True
+                    self._rerank_model_ready_name = model
+                    self._rerank_model_checking = False
+                    self._rerank_model_checking_name = ""
+                    self.download_rerank_model_btn.setEnabled(True)
+                    self.download_rerank_model_btn.setText("Verify / Download selected model")
+                    self._rerank_download_worker = None
+                    if hasattr(self, "rerank_download_progress"):
+                        self.rerank_download_progress.setValue(100)
+                    if hasattr(self, "rerank_download_status_label"):
+                        self.rerank_download_status_label.setText(message)
+                    self._update_rerank_tooltip()
+                    self._update_rerank_status_ui()
+                    showInfo(message)
+                    return
+
+                if hasattr(self, "rerank_download_status_label"):
+                    self.rerank_download_status_label.setText("Local cache is incomplete or unavailable. Downloading missing model files...")
+
+                self._start_rerank_model_download(model, python_path)
+
+            except Exception as exc:
+
+                log_debug(f"Rerank pre-download verification error: {exc}")
+                self.download_rerank_model_btn.setEnabled(True)
+                self.download_rerank_model_btn.setText("Verify / Download selected model")
+
+        self._rerank_download_worker.finished_signal.connect(_on_verify_done)
+        self._rerank_download_worker.start()
+
+
+    def _start_rerank_model_download(self, model, python_path):
+
+        self.download_rerank_model_btn.setText("Downloading...")
+
+        if hasattr(self, "rerank_model_status_label"):
+
+            self.rerank_model_status_label.setText(f"Selected model: downloading {model}")
+
+        self._rerank_download_worker = RerankModelDownloadWorker(python_path, model)
+
+        def _on_progress(percent, message):
+
+            try:
+
+                if hasattr(self, "rerank_download_progress"):
+
+                    self.rerank_download_progress.setValue(max(0, min(100, int(percent))))
+
+                if hasattr(self, "rerank_download_status_label"):
+
+                    self.rerank_download_status_label.setText(message)
+
+                if hasattr(self, "rerank_status_label"):
+
+                    self.rerank_status_label.setText("Cross-Encoder package: Ready" if getattr(self, "_rerank_available", False) else "Cross-Encoder package: checking...")
+
+                if hasattr(self, "rerank_model_status_label"):
+
+                    self.rerank_model_status_label.setText(f"Selected model: {message}")
+
+            except Exception as exc:
+
+                log_debug(f"Rerank download progress error: {exc}")
+
+        def _on_done(success, message):
+
+            try:
+
+                self.download_rerank_model_btn.setEnabled(True)
+
+                self.download_rerank_model_btn.setText("Verify / Download selected model")
+
+                self._rerank_download_worker = None
+
+                if hasattr(self, "rerank_download_progress"):
+
+                    self.rerank_download_progress.setValue(100 if success else 0)
+
+                if hasattr(self, "rerank_download_status_label"):
+
+                    self.rerank_download_status_label.setText(message)
+
+                if success:
+
+                    self._rerank_model_ready = True
+
+                    self._rerank_model_ready_name = model
+                    self._rerank_model_checking = False
+                    self._rerank_model_checking_name = ""
+                    self._rerank_model_verify_message = message
+
+                    self._rerank_available = self._check_rerank_available(python_path=python_path)
+
+                    self.enable_rerank_cb.setEnabled(self._rerank_available)
+
+                    self._update_rerank_tooltip()
+
+                    self._update_rerank_status_ui()
+
+                    showInfo(message)
+
+                else:
+
+                    self._rerank_model_ready = False
+
+                    self._rerank_model_ready_name = ""
+                    self._rerank_model_checking = False
+                    self._rerank_model_checking_name = ""
+                    self._rerank_model_verify_message = message
+
+                    self._update_rerank_status_ui()
+
+                    showInfo(f"Could not download/warm model:\n\n{message}")
+
+            except Exception as exc:
+
+                log_debug(f"Rerank download completion error: {exc}")
+
+        self._rerank_download_worker.progress_signal.connect(_on_progress)
+
+        self._rerank_download_worker.finished_signal.connect(_on_done)
+
+        self._rerank_download_worker.start()
 
 
     def _on_browse_rerank_python(self):
@@ -9144,8 +10091,9 @@ class SettingsDialog(QDialog):
             self.mmr_lambda_value_label.setEnabled(is_v2 and mmr_on)
 
         if mark_dirty and hasattr(self, "retrieval_dirty_label"):
-
             self.retrieval_dirty_label.show()
+            if hasattr(self, "retrieval_dirty_row"):
+                self.retrieval_dirty_row.show()
 
 
     def _refresh_embedding_status(self):

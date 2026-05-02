@@ -601,8 +601,8 @@ class AISearchDialog(QDialog):
 
     # --- Answer Formatting And Citation Navigation ---
 
-    def _restore_answer_html(self, html):
-        return answer_navigation._restore_answer_html(self, html)
+    def _restore_answer_html(self, html, scroll_value=None):
+        return answer_navigation._restore_answer_html(self, html, scroll_value)
 
 
 
@@ -637,8 +637,8 @@ class AISearchDialog(QDialog):
 
 
 
-    def _open_note_in_browser(self, note_id):
-        return answer_navigation._open_note_in_browser(self, note_id)
+    def _open_note_in_browser(self, note_id, num=None):
+        return answer_navigation._open_note_in_browser(self, note_id, num)
 
 
 

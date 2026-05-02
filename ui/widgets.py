@@ -96,7 +96,63 @@ class SpellCheckPlainTextEdit(QPlainTextEdit):
         cursor.endEditBlock()
 
 
-def settings_field_row(theme, content=None, label=None, layout=None, vertical=False):
+def _first_tooltip_from_widget(widget):
+    if widget is None:
+        return ""
+    tooltip = widget.toolTip()
+    if tooltip:
+        return tooltip
+    for child in widget.findChildren(QWidget):
+        tooltip = child.toolTip()
+        if tooltip:
+            return tooltip
+    return ""
+
+
+def _first_tooltip_from_layout(layout):
+    for i in range(layout.count()):
+        item = layout.itemAt(i)
+        widget = item.widget() if item is not None else None
+        if widget is not None:
+            tooltip = _first_tooltip_from_widget(widget)
+            if tooltip:
+                return tooltip
+        child_layout = item.layout() if item is not None else None
+        if child_layout is not None:
+            tooltip = _first_tooltip_from_layout(child_layout)
+            if tooltip:
+                return tooltip
+    return ""
+
+
+def apply_setting_row_tooltip(row, tooltip=None):
+    """Apply one setting tooltip across the whole row and its plain labels."""
+    if row is None:
+        return
+
+    resolved = tooltip or row.toolTip() or _first_tooltip_from_widget(row)
+    if not resolved:
+        return
+
+    row.setToolTip(resolved)
+    for label in row.findChildren(QLabel):
+        if not label.toolTip():
+            label.setToolTip(resolved)
+
+
+def sync_setting_row_tooltips(root):
+    """Normalize tooltips for all settings rows under root."""
+    if root is None:
+        return
+    rows = []
+    if getattr(root, "objectName", lambda: "")() == "settingsFieldRow":
+        rows.append(root)
+    rows.extend(root.findChildren(QFrame, "settingsFieldRow"))
+    for row in rows:
+        apply_setting_row_tooltip(row)
+
+
+def settings_field_row(theme, content=None, label=None, layout=None, vertical=False, tooltip=None):
     row = QFrame()
     row.setObjectName("settingsFieldRow")
     row.setStyleSheet(settings_field_row_stylesheet(theme))
@@ -105,8 +161,18 @@ def settings_field_row(theme, content=None, label=None, layout=None, vertical=Fa
     row_layout.setContentsMargins(8, 6, 8, 6)
     row_layout.setSpacing(8)
 
+    resolved_tooltip = tooltip or (
+        content.toolTip() if content is not None and hasattr(content, "toolTip") else ""
+    )
+    if not resolved_tooltip and layout is not None:
+        resolved_tooltip = _first_tooltip_from_layout(layout)
+    if resolved_tooltip:
+        row.setToolTip(resolved_tooltip)
+
     if label:
         label_widget = label if isinstance(label, QLabel) else QLabel(str(label))
+        if resolved_tooltip and not label_widget.toolTip():
+            label_widget.setToolTip(resolved_tooltip)
         if not vertical:
             label_widget.setMinimumWidth(170)
         row_layout.addWidget(label_widget)
@@ -115,6 +181,8 @@ def settings_field_row(theme, content=None, label=None, layout=None, vertical=Fa
         row_layout.addLayout(layout)
     elif content is not None:
         row_layout.addWidget(content)
+
+    apply_setting_row_tooltip(row, resolved_tooltip)
 
     return row
 

@@ -14,6 +14,13 @@ from .log import log_debug
 
 # Voyage embedding models: voyage-3-lite is faster with fewer dimensions; voyage-3.5-lite is higher quality
 VOYAGE_EMBEDDING_MODELS = ["voyage-3-lite", "voyage-3.5-lite"]
+DEFAULT_RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L6-v2"
+RERANK_TOP_K_DEFAULT = 25
+RERANK_TOP_K_MIN = 5
+RERANK_TOP_K_MAX = 100
+RERANK_TIMEOUT_SECONDS_DEFAULT = 90
+RERANK_TIMEOUT_SECONDS_MIN = 15
+RERANK_TIMEOUT_SECONDS_MAX = 300
 
 # Safe defaults for shipped config (no secrets, no machine-specific paths)
 DEFAULT_CONFIG = {
@@ -74,6 +81,9 @@ DEFAULT_CONFIG = {
         "ollama_batch_size": 16,
         "use_dynamic_batch_size": True,
         "ollama_chat_model": "llama3.2:latest",
+        "rerank_model": DEFAULT_RERANK_MODEL,
+        "rerank_top_k": RERANK_TOP_K_DEFAULT,
+        "rerank_timeout_seconds": RERANK_TIMEOUT_SECONDS_DEFAULT,
         "rerank_python_path": "",
         "sentence_transformers_path": None,
         "sensitivity_percent": 87,
@@ -181,6 +191,7 @@ def load_config():
         if "relevance_mode" not in file_search_config:
             search_config["relevance_mode"] = "balanced"
         _protect_answer_model_from_embedding_migration(search_config)
+        normalize_rerank_config(search_config, log_warnings=True)
         normalize_retrieval_config(search_config, log_warnings=True)
         merged["search_config"] = search_config
         log_debug(f"Config loaded from file (merged with defaults)")
@@ -233,6 +244,66 @@ def get_config_value(config, key, default):
     if not config:
         return default
     return config.get(key, default)
+
+
+# ============================================================================
+# Rerank Configuration
+# ============================================================================
+
+def normalize_rerank_config(search_config, log_warnings=False):
+    """Normalize Cross-Encoder rerank settings in-place and return them."""
+    sc = search_config if isinstance(search_config, dict) else {}
+    warnings = []
+
+    model = (sc.get("rerank_model") or "").strip()
+    if not model:
+        model = DEFAULT_RERANK_MODEL
+    sc["rerank_model"] = model
+
+    try:
+        top_k = int(sc.get("rerank_top_k", RERANK_TOP_K_DEFAULT))
+    except Exception:
+        warnings.append(f"rerank_top_k must be an integer; using {RERANK_TOP_K_DEFAULT!r}")
+        top_k = RERANK_TOP_K_DEFAULT
+    clamped = max(RERANK_TOP_K_MIN, min(RERANK_TOP_K_MAX, top_k))
+    if clamped != top_k:
+        warnings.append(
+            f"rerank_top_k={top_k!r} outside {RERANK_TOP_K_MIN}..{RERANK_TOP_K_MAX}; clamped to {clamped!r}"
+        )
+    sc["rerank_top_k"] = clamped
+
+    try:
+        timeout_seconds = int(sc.get("rerank_timeout_seconds", RERANK_TIMEOUT_SECONDS_DEFAULT))
+    except Exception:
+        warnings.append(
+            f"rerank_timeout_seconds must be an integer; using {RERANK_TIMEOUT_SECONDS_DEFAULT!r}"
+        )
+        timeout_seconds = RERANK_TIMEOUT_SECONDS_DEFAULT
+    clamped_timeout = max(
+        RERANK_TIMEOUT_SECONDS_MIN,
+        min(RERANK_TIMEOUT_SECONDS_MAX, timeout_seconds),
+    )
+    if clamped_timeout != timeout_seconds:
+        warnings.append(
+            f"rerank_timeout_seconds={timeout_seconds!r} outside "
+            f"{RERANK_TIMEOUT_SECONDS_MIN}..{RERANK_TIMEOUT_SECONDS_MAX}; "
+            f"clamped to {clamped_timeout!r}"
+        )
+    sc["rerank_timeout_seconds"] = clamped_timeout
+
+    if log_warnings:
+        for warning in warnings:
+            log_debug(f"Rerank config warning: {warning}")
+    return sc
+
+
+def get_rerank_config(config_or_search_config):
+    """Return normalized rerank config from full config or search_config."""
+    source = config_or_search_config or {}
+    if isinstance(source, dict) and "search_config" in source:
+        source = source.get("search_config") or {}
+    sc = dict(source or {})
+    return normalize_rerank_config(sc, log_warnings=False)
 
 
 # ============================================================================

@@ -69,7 +69,7 @@ def format_answer_html(answer, context_note_ids, spacing_mode, patterns):
             for note_id, display, position in pairs:
                 if note_id is not None:
                     links.append(
-                        f'<a href="#cite-{position}" style="color:#3498db;text-decoration:underline;cursor:pointer;" '
+                        f'<a href="cite:{position}" style="color:#3498db;text-decoration:underline;cursor:pointer;" '
                         f'title="Single-click: highlight in list. Double-click: open in browser.">[{display}]</a>'
                     )
                 else:
@@ -181,8 +181,4 @@ def format_answer_html(answer, context_note_ids, spacing_mode, patterns):
         "<style>a { color: #3498db !important; text-decoration: underline !important; } "
         "a:hover { color: #5dade2 !important; }</style>"
     )
-    anchors = ''.join(
-        f'<span id="cite-{i}" style="position:absolute;width:0;height:0;"></span>'
-        for i in range(1, len(context_note_ids or []) + 1)
-    )
-    return f'{link_style}<div style="line-height: {styles["lh"]}; margin: 0;">{html_content}</div>{anchors}'
+    return f'{link_style}<div style="line-height: {styles["lh"]}; margin: 0;">{html_content}</div>'

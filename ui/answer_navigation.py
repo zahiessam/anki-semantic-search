@@ -17,11 +17,30 @@ from ..utils import log_debug
 # Answer HTML, Citation Navigation, And Clipboard Helpers
 # ============================================================================
 
-def _restore_answer_html(self, html):
+def _answer_scroll_value(self):
+    if not hasattr(self, 'answer_box') or not hasattr(self.answer_box, 'verticalScrollBar'):
+        return None
+    try:
+        return self.answer_box.verticalScrollBar().value()
+    except Exception:
+        return None
+
+
+def _restore_answer_scroll(self, value):
+    if value is None or not hasattr(self, 'answer_box') or not hasattr(self.answer_box, 'verticalScrollBar'):
+        return
+    try:
+        bar = self.answer_box.verticalScrollBar()
+        bar.setValue(max(bar.minimum(), min(value, bar.maximum())))
+    except Exception:
+        pass
+
+
+def _restore_answer_html(self, html, scroll_value=None):
 
 
 
-    """Restore the answer box HTML (used after link click so the AI answer does not disappear)."""
+    """Restore the answer box HTML without moving the reader away from their current position."""
 
 
 
@@ -29,7 +48,12 @@ def _restore_answer_html(self, html):
 
 
 
+        if scroll_value is None:
+            scroll_value = _answer_scroll_value(self)
+
         self.answer_box.setHtml(html)
+        _restore_answer_scroll(self, scroll_value)
+        QTimer.singleShot(0, lambda v=scroll_value: _restore_answer_scroll(self, v))
 
 
 def _selected_result_note_ids(self):
@@ -83,7 +107,7 @@ def _on_answer_link_clicked(self, url):
 
 
 
-    """Citation links: single-click highlights note in Matching notes; double-click opens in Anki Browser (over add-on). Supports #cite-N, anki:goto_note:{note_id}, and legacy note:N."""
+    """Citation links: single-click highlights note in Matching notes; double-click opens in Anki Browser (over add-on). Supports cite:N, legacy #cite-N, anki:goto_note:{note_id}, and legacy note:N."""
 
 
 
@@ -92,6 +116,7 @@ def _on_answer_link_clicked(self, url):
 
 
     saved_html = getattr(self, '_last_formatted_answer', None) or (self.answer_box.toHtml() if hasattr(self.answer_box, 'toHtml') else None)
+    saved_scroll = _answer_scroll_value(self)
 
 
 
@@ -107,7 +132,7 @@ def _on_answer_link_clicked(self, url):
 
 
 
-            self.answer_box.setHtml(saved_html)
+            self._restore_answer_html(saved_html, saved_scroll)
 
 
 
@@ -127,7 +152,19 @@ def _on_answer_link_clicked(self, url):
 
 
 
-    if s.startswith('#cite-'):
+    if s.startswith('cite:'):
+        try:
+            num = int(s.split(':', 1)[1].strip())
+
+            if 1 <= num <= len(ctx):
+
+                note_id = ctx[num - 1]
+
+        except (ValueError, TypeError):
+
+            pass
+
+    elif s.startswith('#cite-'):
 
 
 
@@ -227,7 +264,7 @@ def _on_answer_link_clicked(self, url):
 
 
 
-            self.answer_box.setHtml(saved_html)
+            self._restore_answer_html(saved_html, saved_scroll)
 
 
 
@@ -283,128 +320,18 @@ def _on_answer_link_clicked(self, url):
 
 
 
-    # Always highlight the corresponding row in the results list
+    # Citation clicks are navigation only. Keep whatever sort/filter order the
+    # user chose, and just move the table view to the matching Ref row.
 
 
 
-    if hasattr(self, 'all_scored_notes') and self.all_scored_notes:
-
-
-
-        self._pinned_note_ids = {note_id}
-
-
-
-        max_score = self.all_scored_notes[0][0]
-
-
-
-        thresh = self.sensitivity_slider.value() if self.sensitivity_slider else 0
-
-
-
-        min_score = (thresh / 100.0) * max_score if max_score > 0 else 0
-
-
-
-        id_to_score = {n['id']: s for s, n in self.all_scored_notes}
-
-
-
-        pinned_orig_scores = [id_to_score.get(nid, 0) for nid in self._pinned_note_ids]
-
-
-
-        any_filtered = any(orig < min_score for orig in pinned_orig_scores)
-
-
-
-        if any_filtered and self.sensitivity_slider is not None:
-
-
-
-            self.sensitivity_slider.blockSignals(True)
-
-
-
-            self.sensitivity_slider.setValue(0)
-
-
-
-            if self.sensitivity_value_label is not None:
-
-
-
-                self.sensitivity_value_label.setText("0%")
-
-
-
-            self.sensitivity_slider.blockSignals(False)
-
-
-
-        order = {nid: i for i, nid in enumerate(ctx)}
-
-
-
-        pinned = []
-
-
-
-        rest = []
-
-
-
-        for score, note in self.all_scored_notes:
-
-
-
-            if note['id'] in self._pinned_note_ids:
-
-
-
-                pinned.append((max_score, note))
-
-
-
-            else:
-
-
-
-                rest.append((score, note))
-
-
-
-        pinned.sort(key=lambda x: order.get(x[1]['id'], 999))
-
-
-
-        self.all_scored_notes = pinned + rest
-
-
-
-        self.filter_and_display_notes()
-
-
-
-
-
-
-
-        # Scroll to and highlight only the clicked citation row.
-        _highlight_result_notes(self, {note_id}, scroll_to_note_id=note_id, scroll_to_ref=num)
-
-
-
-
-
-
+    _highlight_result_notes(self, {note_id}, scroll_to_note_id=note_id, scroll_to_ref=num)
 
     if saved_html:
 
 
 
-        QTimer.singleShot(0, lambda h=saved_html: self._restore_answer_html(h))
+        QTimer.singleShot(0, lambda h=saved_html, v=saved_scroll: self._restore_answer_html(h, v))
 
 
 
