@@ -21,6 +21,11 @@ RERANK_TOP_K_MAX = 100
 RERANK_TIMEOUT_SECONDS_DEFAULT = 90
 RERANK_TIMEOUT_SECONDS_MIN = 15
 RERANK_TIMEOUT_SECONDS_MAX = 300
+RESEARCH_MODE_DEFAULT = "compact"
+RESEARCH_MODE_CHOICES = ("compact", "full")
+MAX_RESEARCH_FILES_DEFAULT = 50
+MAX_RESEARCH_FILES_MIN = 1
+MAX_RESEARCH_FILES_MAX = 1000
 
 # Safe defaults for shipped config (no secrets, no machine-specific paths)
 DEFAULT_CONFIG = {
@@ -84,6 +89,9 @@ DEFAULT_CONFIG = {
         "rerank_model": DEFAULT_RERANK_MODEL,
         "rerank_top_k": RERANK_TOP_K_DEFAULT,
         "rerank_timeout_seconds": RERANK_TIMEOUT_SECONDS_DEFAULT,
+        "research_enabled": False,
+        "research_mode": RESEARCH_MODE_DEFAULT,
+        "max_research_files": MAX_RESEARCH_FILES_DEFAULT,
         "rerank_python_path": "",
         "sentence_transformers_path": None,
         "sensitivity_percent": 87,
@@ -178,7 +186,11 @@ def load_config():
         config_path = get_config_file_path()
         if not os.path.exists(config_path):
             log_debug(f"Config file does not exist: {config_path}, using defaults")
-            return _deep_merge(DEFAULT_CONFIG, {})
+            merged = _deep_merge(DEFAULT_CONFIG, {})
+            search_config = dict(merged.get("search_config") or {})
+            normalize_research_config(search_config, {}, log_warnings=False)
+            merged["search_config"] = search_config
+            return merged
         with open(config_path, "r", encoding="utf-8-sig") as f:
             file_config = json.load(f)
         for typo in ("retrieval_versoin", "retrival_version"):
@@ -193,12 +205,26 @@ def load_config():
         _protect_answer_model_from_embedding_migration(search_config)
         normalize_rerank_config(search_config, log_warnings=True)
         normalize_retrieval_config(search_config, log_warnings=True)
+        normalize_research_config(search_config, file_search_config, log_warnings=True)
         merged["search_config"] = search_config
         log_debug(f"Config loaded from file (merged with defaults)")
         return merged
     except Exception as e:
         log_debug(f"Error loading config file: {e}")
-        return _deep_merge(DEFAULT_CONFIG, {})
+        merged = _deep_merge(DEFAULT_CONFIG, {})
+        search_config = dict(merged.get("search_config") or {})
+        normalize_research_config(search_config, {}, log_warnings=False)
+        merged["search_config"] = search_config
+        return merged
+
+
+def _research_log_dir_exists():
+    try:
+        from .paths import get_checkpoint_path
+
+        return os.path.isdir(os.path.join(os.path.dirname(get_checkpoint_path()), "search_research"))
+    except Exception:
+        return False
 
 
 def _looks_like_embedding_model(model):
@@ -304,6 +330,56 @@ def get_rerank_config(config_or_search_config):
         source = source.get("search_config") or {}
     sc = dict(source or {})
     return normalize_rerank_config(sc, log_warnings=False)
+
+
+# ============================================================================
+# Search Research Logging Configuration
+# ============================================================================
+
+def normalize_research_config(search_config, file_search_config=None, log_warnings=False):
+    """Normalize local search research logging settings in-place and return them."""
+    sc = search_config if isinstance(search_config, dict) else {}
+    file_sc = file_search_config if isinstance(file_search_config, dict) else sc
+    warnings = []
+
+    if "research_enabled" not in file_sc:
+        sc["research_enabled"] = _research_log_dir_exists()
+    else:
+        sc["research_enabled"] = _coerce_bool(
+            sc.get("research_enabled", False),
+            False,
+            "research_enabled",
+            warnings,
+        )
+
+    mode = (sc.get("research_mode") or RESEARCH_MODE_DEFAULT).strip().lower()
+    if mode not in RESEARCH_MODE_CHOICES:
+        warnings.append(f"research_mode={mode!r} is invalid; using {RESEARCH_MODE_DEFAULT!r}")
+        mode = RESEARCH_MODE_DEFAULT
+    sc["research_mode"] = mode
+
+    sc["max_research_files"] = _coerce_int(
+        sc.get("max_research_files", MAX_RESEARCH_FILES_DEFAULT),
+        MAX_RESEARCH_FILES_DEFAULT,
+        MAX_RESEARCH_FILES_MIN,
+        MAX_RESEARCH_FILES_MAX,
+        "max_research_files",
+        warnings,
+    )
+
+    if log_warnings:
+        for warning in warnings:
+            log_debug(f"Research config warning: {warning}")
+    return sc
+
+
+def get_research_config(config_or_search_config):
+    """Return normalized search research logging config from full config or search_config."""
+    source = config_or_search_config or {}
+    if isinstance(source, dict) and "search_config" in source:
+        source = source.get("search_config") or {}
+    sc = dict(source or {})
+    return normalize_research_config(sc, sc, log_warnings=False)
 
 
 # ============================================================================

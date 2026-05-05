@@ -36,6 +36,13 @@ from . import query_enhancement
 from . import search_dialog_state
 from . import search_dialog_ui
 from . import search_dialog_lifecycle
+from .search_browser_actions_mixin import SearchBrowserActionsMixin
+from .search_model_selection_mixin import SearchModelSelectionMixin
+from .search_note_preview_mixin import SearchNotePreviewMixin
+from .search_progress_mixin import SearchProgressMixin
+from .search_research_mixin import SearchResearchMixin
+from .search_selection_mixin import SearchSelectionMixin
+from .search_source_labels_mixin import SearchSourceLabelsMixin
 
 # Local imports
 from .theme import get_addon_theme
@@ -367,7 +374,7 @@ def _agent_debug_log(run_id, hypothesis_id, location, message, data=None):
 # AI Search Dialog
 # ============================================================================
 
-class AISearchDialog(QDialog):
+class AISearchDialog(QDialog, SearchResearchMixin, SearchProgressMixin, SearchBrowserActionsMixin, SearchSelectionMixin, SearchNotePreviewMixin, SearchSourceLabelsMixin, SearchModelSelectionMixin):
 
 
 
@@ -405,56 +412,6 @@ class AISearchDialog(QDialog):
 
 
         return EmbeddingSearchWorker.perform_search(self)
-
-
-
-
-
-
-
-    # --- Selection Controls ---
-
-    def toggle_select_all(self):
-
-
-
-        """Bridge to shared toggle_select_all implementation."""
-
-
-
-        return EmbeddingSearchWorker.toggle_select_all(self)
-
-
-
-
-
-
-
-    def select_all_notes(self):
-
-
-
-        """Bridge to shared select_all_notes implementation."""
-
-
-
-        return EmbeddingSearchWorker.select_all_notes(self)
-
-
-
-
-
-
-
-    def deselect_all_notes(self):
-
-
-
-        """Bridge to shared deselect_all_notes implementation."""
-
-
-
-        return EmbeddingSearchWorker.deselect_all_notes(self)
 
 
 
@@ -875,15 +832,6 @@ class AISearchDialog(QDialog):
 # Search Worker Compatibility And Standalone Search Helpers
 # ============================================================================
 
-# --- Embedding Search Execution ---
-
-
-
-
-# ============================================================================
-# Search Worker Compatibility And Standalone Search Helpers
-# ============================================================================
-
 from .search_workers import (
     MAX_RERANK_COUNT,
     RRF_K,
@@ -956,32 +904,6 @@ def toggle_sidebar_visibility(visible: bool):
 # ============================================================================
 
 from .settings_dialog import SettingsDialog
-
-
-
-
-
-
-
-# END OF PART 1 - Continue to PART 2
-
-# PART 2 OF 3 - Continue from PART 1
-
-
-
-from aqt.qt import *
-
-# Use pyqtSignal directly as it is the most stable across Anki versions
-
-try:
-
-    from PyQt6.QtCore import pyqtSignal as Signal, pyqtSlot as Slot
-
-except ImportError:
-
-    from PyQt5.QtCore import pyqtSignal as Signal, pyqtSlot as Slot
-
-
 
 # ============================================================================
 # Public Dialog Entry Points

@@ -77,7 +77,7 @@ def format_answer_html(answer, context_note_ids, spacing_mode, patterns):
                         f'<span title="Citation out of range (max {context_len})" style="color:#95a5a6;">'
                         f'[{display}]</span>'
                     )
-            return '[' + ','.join(links) + ']'
+            return ', '.join(links)
 
         escaped = citation_n_re.sub(cite_link, escaped)
         escaped = citation_re.sub(cite_link, escaped)

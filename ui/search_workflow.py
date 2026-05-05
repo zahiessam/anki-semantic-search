@@ -44,9 +44,9 @@ from ..utils import (
     save_search_history,
 )
 from ..utils.search_research_log import (
-    compact_results,
-    new_search_run_id,
-    write_search_research_report,
+    make_answer_payload,
+    make_prompt_payload,
+    rank_deltas,
 )
 
 
@@ -205,539 +205,6 @@ class AnthropicStreamWorker(QThread):
 
 
     # --- Copied Search Progress Handlers ---
-
-    def _get_answer_source_text(self, config):
-
-
-
-        """Return a short hint: where the answer came from (online API name or local model)."""
-
-
-
-        if not config:
-
-
-
-            return ""
-
-
-
-        provider = config.get("provider", "openai")
-
-
-
-        if provider == "ollama":
-
-
-
-            sc = config.get("search_config") or {}
-
-
-
-            model = (sc.get("ollama_chat_model") or "llama3.2").strip()
-
-
-
-            return f"Ollama (local) \u2014 {model}"
-
-        if provider in ("local_openai", "local_server"):
-            sc = config.get("search_config") or {}
-            model = (
-                sc.get("answer_local_model")
-                or sc.get("local_llm_model")
-                or config.get("local_llm_model")
-                or "local-model"
-            ).strip()
-            base_url = (
-                sc.get("local_llm_url")
-                or config.get("local_llm_url")
-                or config.get("api_url")
-                or ""
-            ).strip()
-            label = "Local Server (Ollama, LM Studio, Jan)"
-            if "11434" in base_url:
-                label = "Ollama (local)"
-            elif "1234" in base_url:
-                label = "LM Studio/Jan (local)"
-            return f"{label} \u2014 {model}"
-
-
-
-        names = {
-
-
-
-            "anthropic": "Anthropic (Claude)",
-
-
-
-            "openai": "OpenAI (GPT)",
-
-
-
-            "google": "Google (Gemini)",
-
-
-
-            "openrouter": "OpenRouter",
-
-
-
-            "custom": "Custom / OpenAI-compatible",
-
-
-
-        }
-
-
-
-        name = names.get(provider, "API")
-
-
-
-        model = self.get_best_model(provider)
-
-
-
-        return f"{name} \u2014 {model}"
-
-
-    def _get_embedding_source_text(self, config):
-
-        """Return a compact label for the embedding provider/model actually configured."""
-
-        if not config:
-
-            return "unknown"
-
-        effective = get_effective_embedding_config(config)
-
-        sc = effective.get("search_config") or {}
-
-        engine = (sc.get("embedding_engine") or "unknown").strip().lower()
-
-        if engine == "local_openai":
-
-            model = (
-                sc.get("local_llm_model")
-                or sc.get("embedding_local_model")
-                or "local-embedding-model"
-            )
-
-            return f"local_openai:{model}"
-
-        if engine == "ollama":
-
-            model = sc.get("ollama_embed_model") or sc.get("embedding_local_model") or "nomic-embed-text"
-
-            return f"ollama:{model}"
-
-        if engine == "voyage":
-
-            return f"voyage:{sc.get('voyage_embedding_model') or 'voyage-3.5-lite'}"
-
-        if engine == "openai":
-
-            return f"openai:{sc.get('openai_embedding_model') or 'text-embedding-3-small'}"
-
-        if engine == "cohere":
-
-            return f"cohere:{sc.get('cohere_embedding_model') or 'embed-english-v3.0'}"
-
-        return engine or "unknown"
-
-
-    def _get_rerank_source_text(self, search_config, effective_method):
-
-        """Return reranker model and whether it actually ran."""
-
-        if "Re-ranked" not in (effective_method or ""):
-
-            return "off"
-
-        model = (search_config.get("rerank_model") or "cross-encoder/ms-marco-MiniLM-L6-v2").strip()
-
-        status = "ok" if getattr(self, "_last_rerank_success", False) else "skipped"
-
-        return f"{model} ({status})"
-
-
-    def _build_result_source_text(self, config, effective_method):
-
-        search_config = config.get("search_config") or {}
-
-        mode = (search_config.get("relevance_mode") or "balanced").strip().lower()
-
-        mode_display = {"focused": "Focused", "balanced": "Balanced", "broad": "Broad"}.get(
-            mode,
-            mode.capitalize() if mode else "Balanced",
-        )
-
-        answer = self._get_answer_source_text(config) or "none"
-
-        embeddings = self._get_embedding_source_text(config)
-
-        reranker = self._get_rerank_source_text(search_config, effective_method)
-
-        return (
-            f"Results from: {effective_method} \u00b7 {mode_display} "
-            f"\u00b7 Answer: {answer} \u00b7 Embeddings: {embeddings} \u00b7 Reranker: {reranker}"
-        )
-
-
-    def _init_search_research_report(self, query, config):
-
-        sc = (config or {}).get("search_config") or {}
-
-        self._search_research_report = {
-            "run_id": new_search_run_id(),
-            "started_at": datetime.datetime.now().isoformat(),
-            "query": query,
-            "config": config,
-            "models": {
-                "answer": self._get_answer_source_text(config),
-                "embeddings": self._get_embedding_source_text(config),
-                "reranker": sc.get("rerank_model") or "off",
-            },
-            "settings": {
-                "search_method": sc.get("search_method"),
-                "relevance_mode": sc.get("relevance_mode"),
-                "enable_query_expansion": sc.get("enable_query_expansion"),
-                "enable_hyde": sc.get("enable_hyde"),
-                "enable_rerank": sc.get("enable_rerank"),
-                "rerank_top_k": sc.get("rerank_top_k"),
-                "rerank_timeout_seconds": sc.get("rerank_timeout_seconds"),
-                "hybrid_embedding_weight": sc.get("hybrid_embedding_weight"),
-                "min_relevance_percent": sc.get("min_relevance_percent"),
-                "max_results": sc.get("max_results"),
-                "retrieval_version": sc.get("retrieval_version"),
-                "keyword_scoring_method": sc.get("keyword_scoring_method"),
-                "enable_mmr_diversity": sc.get("enable_mmr_diversity"),
-                "mmr_lambda": sc.get("mmr_lambda"),
-                "mmr_candidate_pool": sc.get("mmr_candidate_pool"),
-            },
-            "stages": [],
-        }
-
-
-    def _research_stage(self, name, **data):
-
-        report = getattr(self, "_search_research_report", None)
-
-        if not isinstance(report, dict):
-
-            return
-
-        report.setdefault("stages", []).append({
-            "name": name,
-            "timestamp": datetime.datetime.now().isoformat(),
-            **data,
-        })
-
-
-    def _write_search_research_report(self, **updates):
-
-        report = getattr(self, "_search_research_report", None)
-
-        if not isinstance(report, dict):
-
-            return None
-
-        report.update(updates)
-
-        path = write_search_research_report(report)
-
-        if path:
-
-            log_debug(f"Search research report written: {path}")
-
-        return path
-
-
-
-
-
-
-
-    def _on_embedding_search_progress(self, current, total, message):
-
-
-
-        """Update status and progress bar while embedding search runs in background."""
-
-
-
-        try:
-
-
-
-            if hasattr(self, 'status_label') and self.status_label:
-
-
-
-                self.status_label.setText(message)
-
-
-
-            if hasattr(self, 'search_progress_bar') and self.search_progress_bar and total > 0:
-
-
-
-                self.search_progress_bar.setRange(0, total)
-
-
-
-                self.search_progress_bar.setValue(current)
-
-
-
-                self.search_progress_bar.setVisible(True)
-
-
-
-            if hasattr(self, 'search_progress_label') and self.search_progress_label:
-
-
-
-                self.search_progress_label.setText(f"{current}/{total}")
-
-
-
-                self.search_progress_label.setVisible(True)
-
-
-
-        except Exception:
-
-
-
-            pass
-
-
-
-
-
-
-
-    def _show_busy_progress(self, message=""):
-
-
-
-        """Show indeterminate progress bar and optional label during long operations (re-rank, AI call, load)."""
-
-
-
-        self._show_centile_progress(message, 0)
-
-
-
-
-
-
-
-    def _show_centile_progress(self, message="", percent=0):
-
-
-
-        """Show 0\xe2\u20ac\u201c100% progress bar and label. Use for estimated or real progress during long operations."""
-
-
-
-        if hasattr(self, 'search_progress_bar') and self.search_progress_bar:
-
-
-
-            self.search_progress_bar.setRange(0, 100)
-
-
-
-            self.search_progress_bar.setValue(max(0, min(100, round(percent))))
-
-
-
-            self.search_progress_bar.setVisible(True)
-
-
-
-        if hasattr(self, 'search_progress_label') and self.search_progress_label:
-
-
-
-            self.search_progress_label.setText(message)
-
-
-
-            self.search_progress_label.setVisible(True)
-
-
-
-        self._last_progress_message = message
-
-
-
-
-
-
-
-    def _start_estimated_progress_timer(self, duration_sec, start_pct=5, end_pct=95):
-
-
-
-        """Advance progress bar from start_pct to end_pct over duration_sec (est. wait). Call _stop_estimated_progress_timer when done."""
-
-
-
-        import time
-
-
-
-        self._stop_estimated_progress_timer()
-
-
-
-        self._progress_estimate_active = True
-
-
-
-        self._progress_estimate_start = time.time()
-
-
-
-        self._progress_estimate_duration = max(1, duration_sec)
-
-
-
-        self._progress_estimate_start_pct = start_pct
-
-
-
-        self._progress_estimate_end_pct = end_pct
-
-
-
-
-
-
-
-        def _tick():
-
-
-
-            if not getattr(self, '_progress_estimate_active', False):
-
-
-
-                return
-
-
-
-            elapsed = time.time() - getattr(self, '_progress_estimate_start', 0)
-
-
-
-            dur = getattr(self, '_progress_estimate_duration', 30)
-
-
-
-            s = getattr(self, '_progress_estimate_start_pct', 5)
-
-
-
-            e = getattr(self, '_progress_estimate_end_pct', 95)
-
-
-
-            pct = s + (elapsed / dur) * (e - s)
-
-
-
-            pct = max(s, min(e, pct))
-
-
-
-            msg = getattr(self, '_last_progress_message', '')
-
-
-
-            self._show_centile_progress(msg, pct)
-
-
-
-            if elapsed < dur:
-
-
-
-                QTimer.singleShot(500, _tick)
-
-
-
-
-
-
-
-        QTimer.singleShot(300, _tick)
-
-
-
-
-
-
-
-    def _stop_estimated_progress_timer(self):
-
-
-
-        """Stop the estimated progress timer (e.g. when the long operation finishes)."""
-
-
-
-        self._progress_estimate_active = False
-
-
-
-
-
-
-
-    def _hide_busy_progress(self):
-
-
-
-        """Hide progress bar and label; reset bar to deterministic range for next use."""
-
-
-
-        if hasattr(self, 'search_progress_bar') and self.search_progress_bar:
-
-
-
-            self.search_progress_bar.setRange(0, 100)
-
-
-
-            self.search_progress_bar.setValue(0)
-
-
-
-            self.search_progress_bar.setVisible(False)
-
-
-
-        if hasattr(self, 'search_progress_label') and self.search_progress_label:
-
-
-
-            self.search_progress_label.setText("")
-
-
-
-            self.search_progress_label.setVisible(False)
-
-
-
-
-
-
 
     def _on_embedding_search_finished(self, embedding_results):
 
@@ -1004,12 +471,13 @@ class AnthropicStreamWorker(QThread):
 
 
             self._rerank_continue = (notes, effective_method, search_config)
+            self._research_pre_rerank_results = self._research_results(scored_notes, limit=100)
 
             self._research_stage(
                 "pre_cross_encoder_candidates",
                 effective_method=effective_method,
                 total_candidates=len(scored_notes or []),
-                top_results=compact_results(scored_notes, limit=50),
+                top_results=self._research_pre_rerank_results[:50],
             )
 
 
@@ -1134,7 +602,7 @@ class AnthropicStreamWorker(QThread):
             completed_at=datetime.datetime.now().isoformat(),
             final_status="embedding_error",
             error=error_msg,
-            final_results=compact_results(getattr(self, "all_scored_notes", []), limit=100),
+            final_results=self._research_results(getattr(self, "all_scored_notes", []), limit=100),
         )
 
 
@@ -1258,7 +726,7 @@ class AnthropicStreamWorker(QThread):
             effective_method=effective_method,
             total_candidates=len(scored_notes or []),
             total_above_threshold=total_above_threshold,
-            top_results=compact_results(scored_notes, limit=50),
+            top_results=self._research_results(scored_notes, limit=50),
         )
 
         retrieval = get_retrieval_config(config)
@@ -1271,7 +739,7 @@ class AnthropicStreamWorker(QThread):
                 self._research_stage(
                     "mmr_diversity_applied",
                     candidates_after_mmr=len(scored_notes),
-                    top_results=compact_results(scored_notes, limit=50),
+                    top_results=self._research_results(scored_notes, limit=50),
                 )
 
                 self._scored_notes_for_context = None
@@ -2071,7 +1539,7 @@ class AnthropicStreamWorker(QThread):
                     completed_at=datetime.datetime.now().isoformat(),
                     final_status="answer_error",
                     error=error_msg,
-                    final_results=compact_results(getattr(self, "all_scored_notes", []), limit=100),
+                    final_results=self._research_results(getattr(self, "all_scored_notes", []), limit=100),
                 )
 
 
@@ -2265,7 +1733,7 @@ class AnthropicStreamWorker(QThread):
             completed_at=datetime.datetime.now().isoformat(),
             final_status="answer_error",
             error=error_msg,
-            final_results=compact_results(getattr(self, "all_scored_notes", []), limit=100),
+            final_results=self._research_results(getattr(self, "all_scored_notes", []), limit=100),
         )
 
 
@@ -2320,10 +1788,20 @@ class AnthropicStreamWorker(QThread):
 
         save_search_history(getattr(self, 'current_query', ''), answer, relevant_note_ids, scored_notes, context_note_ids)
 
+        answer_payload = make_answer_payload(
+            answer,
+            context_note_ids=context_note_ids,
+            final_results=self._research_results(scored_notes, limit=100),
+            mode=self._research_mode(),
+        )
+        if relevant_indices and not answer_payload.get("relevant_notes_refs"):
+            answer_payload["relevant_notes_refs"] = [idx + 1 for idx in relevant_indices]
+
         self._research_stage(
             "answer_generated",
             answer_model=self._get_answer_source_text(config),
             answer_length=len(answer or ""),
+            answer=answer_payload,
             context_note_ids=list(context_note_ids or []),
             cited_note_ids=list(relevant_note_ids or []),
             relevant_indices=list(relevant_indices or []),
@@ -2568,7 +2046,7 @@ class AnthropicStreamWorker(QThread):
             self._research_stage(
                 "relevance_from_answer_rerank",
                 success=True,
-                top_results=compact_results(self.all_scored_notes, limit=50),
+                top_results=self._research_results(self.all_scored_notes, limit=50),
             )
 
         else:
@@ -2594,6 +2072,10 @@ class AnthropicStreamWorker(QThread):
 
 
         log_debug("Displaying answer and filtering notes...")
+
+        self._stop_estimated_progress_timer()
+
+        self._hide_busy_progress()
 
 
 
@@ -2635,22 +2117,41 @@ class AnthropicStreamWorker(QThread):
 
         self.filter_and_display_notes()
 
+        final_results = self._research_results(getattr(self, "all_scored_notes", []), limit=100)
+        context_note_ids = list(getattr(self, "_context_note_ids", []) or [])
+        answer_payload = make_answer_payload(
+            answer,
+            context_note_ids=context_note_ids,
+            final_results=final_results,
+            mode=self._research_mode(),
+        )
+        cited_refs = sorted(getattr(self, "_cited_refs", set()) or [])
+        if cited_refs and not answer_payload.get("relevant_notes_refs"):
+            answer_payload["relevant_notes_refs"] = cited_refs
+
         self._research_stage(
             "final_display",
             used_history=bool(used_history),
             displayed_rows=self.results_list.rowCount() if hasattr(self, "results_list") else None,
-            final_results=compact_results(getattr(self, "all_scored_notes", []), limit=100),
+            final_results=final_results,
+            answer=answer_payload,
             cited_note_ids=list(getattr(self, "_cited_note_ids", set()) or []),
-            context_note_ids=list(getattr(self, "_context_note_ids", []) or []),
+            context_note_ids=context_note_ids,
         )
 
         self._write_search_research_report(
             completed_at=datetime.datetime.now().isoformat(),
             used_history=bool(used_history),
             final_answer_length=len(answer or ""),
-            final_results=compact_results(getattr(self, "all_scored_notes", []), limit=100),
+            answer=answer_payload,
+            final_results=final_results,
+            rank_deltas=rank_deltas(
+                getattr(self, "_research_pre_rerank_results", []),
+                self._research_results(getattr(self, "all_scored_notes", []), limit=100),
+                final_results,
+            ),
             cited_note_ids=list(getattr(self, "_cited_note_ids", set()) or []),
-            context_note_ids=list(getattr(self, "_context_note_ids", []) or []),
+            context_note_ids=context_note_ids,
         )
 
 
@@ -3373,12 +2874,13 @@ class AnthropicStreamWorker(QThread):
 
 
             self._rerank_continue = (notes, effective_method, search_config)
+            self._research_pre_rerank_results = self._research_results(scored_notes, limit=100)
 
             self._research_stage(
                 "pre_cross_encoder_candidates",
                 effective_method=effective_method,
                 total_candidates=len(scored_notes or []),
-                top_results=compact_results(scored_notes, limit=50),
+                top_results=self._research_pre_rerank_results[:50],
             )
 
 
@@ -3557,7 +3059,11 @@ class AnthropicStreamWorker(QThread):
             "cross_encoder_rerank",
             success=bool(success is True),
             rerank_status="ok" if success is True else "skipped_or_failed",
-            top_results=compact_results(scored_notes, limit=50),
+            top_results=self._research_results(scored_notes, limit=50),
+            rank_deltas=rank_deltas(
+                getattr(self, "_research_pre_rerank_results", []),
+                self._research_results(scored_notes, limit=100),
+            ),
         )
 
         notes, effective_method, search_config = getattr(self, '_rerank_continue', (None, '', {}))
@@ -5932,46 +5438,6 @@ class AnthropicStreamWorker(QThread):
 
 
 
-    def get_best_model(self, provider):
-
-
-
-        models = {
-
-
-
-            'anthropic': 'claude-sonnet-4-20250514',
-
-
-
-            'openai': 'gpt-4o-mini',
-
-
-
-            'google': 'gemini-1.5-flash',
-
-
-
-            'openrouter': 'google/gemini-flash-1.5',
-
-
-
-            'ollama': 'llama3.2'
-
-
-
-        }
-
-
-
-        return models.get(provider, 'gpt-4o-mini')
-
-
-
-
-
-
-
     def _local_context_usage_plan(self, query, available_notes, provider, search_config):
         """Choose a local-model context budget based on question complexity."""
         if provider not in ("local_openai", "local_server", "ollama"):
@@ -6170,6 +5636,14 @@ Rules:
 
 
         input_tokens = estimate_tokens(prompt)
+        if provider != "anthropic":
+            self._research_stage(
+                "answer_prompt_built",
+                provider=provider,
+                model=model,
+                input_tokens=input_tokens,
+                **make_prompt_payload(prompt=prompt, mode=self._research_mode()),
+            )
 
 
 
@@ -6202,6 +5676,16 @@ Rules:
 
 
             system_blocks, user_content = _build_anthropic_prompt_parts(query, context)
+            self._research_stage(
+                "answer_prompt_built",
+                provider=provider,
+                model=model,
+                input_tokens=estimate_tokens(json.dumps(user_content, ensure_ascii=False)),
+                **make_prompt_payload(
+                    prompt_parts={"system_blocks": system_blocks, "user_content": user_content},
+                    mode=self._research_mode(),
+                ),
+            )
 
 
 
@@ -7369,6 +6853,17 @@ Rules:
 
 
         system_blocks, user_content = _build_anthropic_prompt_parts(query, context)
+        self._research_stage(
+            "answer_prompt_built",
+            provider="anthropic",
+            model=model,
+            streaming=True,
+            input_tokens=estimate_tokens(json.dumps(user_content, ensure_ascii=False)),
+            **make_prompt_payload(
+                prompt_parts={"system_blocks": system_blocks, "user_content": user_content},
+                mode=self._research_mode(),
+            ),
+        )
 
 
 
@@ -7518,10 +7013,20 @@ Rules:
 
         save_search_history(query, answer, relevant_note_ids, scored_notes, context_note_ids)
 
+        answer_payload = make_answer_payload(
+            answer,
+            context_note_ids=context_note_ids,
+            final_results=self._research_results(scored_notes, limit=100),
+            mode=self._research_mode(),
+        )
+        if relevant_indices and not answer_payload.get("relevant_notes_refs"):
+            answer_payload["relevant_notes_refs"] = [idx + 1 for idx in relevant_indices]
+
         self._research_stage(
             "answer_generated",
             answer_model=self._get_answer_source_text(config),
             answer_length=len(answer or ""),
+            answer=answer_payload,
             context_note_ids=list(context_note_ids or []),
             cited_note_ids=list(relevant_note_ids or []),
             relevant_indices=list(relevant_indices or []),
@@ -8488,19 +7993,46 @@ Rules:
 
 
 
-        if display_source and ctx and len(ctx) > len(getattr(self, 'all_scored_notes', None) or []):
+        all_scored = list(getattr(self, 'all_scored_notes', None) or [])
 
 
 
-            notes_to_display = display_source
+        citation_order_display = False
 
 
 
-        elif hasattr(self, 'all_scored_notes') and self.all_scored_notes:
+        if display_source and ctx:
 
 
 
-            notes_to_display = self.all_scored_notes
+            notes_to_display = list(display_source)
+
+
+
+            seen_context_keys = {
+                (note.get('id'), note.get('chunk_index'))
+                for _score, note in notes_to_display
+            }
+
+
+
+            notes_to_display.extend(
+                (score, note)
+                for score, note in all_scored
+                if (note.get('id'), note.get('chunk_index')) not in seen_context_keys
+            )
+
+
+
+            citation_order_display = True
+
+
+
+        elif all_scored:
+
+
+
+            notes_to_display = all_scored
 
 
 
@@ -8561,7 +8093,7 @@ Rules:
 
 
 
-        max_score = notes_to_display[0][0] if notes_to_display else 1
+        max_score = max((score for score, _note in notes_to_display), default=1)
 
 
 
@@ -8945,11 +8477,43 @@ Rules:
 
 
 
+            non_context_refs = {}
+
+
+
+            next_ref = len(context_id_and_chunk) + 1
+
+
+
+            for _score, note in filtered_notes:
+
+
+
+                key = (note['id'], note.get('chunk_index'))
+
+
+
+                if key not in ref_from_context and key not in non_context_refs:
+
+
+
+                    non_context_refs[key] = next_ref
+
+
+
+                    next_ref += 1
+
+
+
             def get_ref(note, row):
 
 
 
-                return ref_from_context.get((note['id'], note.get('chunk_index')), row + 1)
+                key = (note['id'], note.get('chunk_index'))
+
+
+
+                return ref_from_context.get(key, non_context_refs.get(key, row + 1))
 
 
 
@@ -9557,7 +9121,7 @@ Rules:
 
 
 
-        if display_source is not None and display_source is notes_to_display:
+        if citation_order_display:
 
 
 
@@ -9577,737 +9141,22 @@ Rules:
 
 
 
-    # --- Copied Result Selection And Browser Actions ---
-
-    def update_selection_count(self):
-
-
-
-        """Update the selected count display and toggle button text"""
-
-
-
-        if not hasattr(self, 'results_list'):
-
-
-
-            return
-
-
-
-
-
-
-
-        checked_count = 0
-
-
-
-        total_count = self.results_list.rowCount()
-
-
-
-
-
-
-
-        # Initialize selected_note_ids if it doesn't exist
-
-
-
-        if not hasattr(self, 'selected_note_ids'):
-
-
-
-            self.selected_note_ids = set()
-
-
-
-
-
-
-
-        # Update persistence set and count (column 0 is the selection checkbox)
-
-
-
-        for row in range(total_count):
-
-
-
-            item = self.results_list.item(row, 0)
-
-
-
-            if item:
-
-
-
-                note_id = item.data(Qt.ItemDataRole.UserRole)
-
-
-
-                if item.checkState() == Qt.CheckState.Checked:
-
-
-
-                    checked_count += 1
-
-
-
-                    if note_id:
-
-
-
-                        self.selected_note_ids.add(note_id)
-
-
-
-                else:
-
-
-
-                    if note_id:
-
-
-
-                        self.selected_note_ids.discard(note_id)
-
-
-
-
-
-
-
-        # Update count label
-
-
-
-        if hasattr(self, 'selected_count_label'):
-
-
-
-            if total_count > 0:
-
-
-
-                self.selected_count_label.setText(f"({checked_count} of {total_count} selected)")
-
-
-
-            else:
-
-
-
-                self.selected_count_label.setText("(0 selected)")
-
-
-
-
-
-
-
-        # Update toggle button text
-
-
-
-        if hasattr(self, 'toggle_select_btn'):
-
-
-
-            if checked_count == total_count and total_count > 0:
-
-
-
-                self.toggle_select_btn.setText("Deselect All")
-
-
-
-            else:
-
-
-
-                self.toggle_select_btn.setText("Select All")
-
-
-
-        if hasattr(self, 'view_btn'):
-            self.view_btn.setEnabled(checked_count > 0)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    def toggle_select_all(self):
-
-
-
-        """Toggle between selecting all and deselecting all notes"""
-
-
-
-        if not hasattr(self, 'results_list') or self.results_list.rowCount() == 0:
-
-
-
-            return
-
-
-
-
-
-
-
-        # Check if all visible rows are selected.
-
-
-
-        all_selected = True
-
-
-
-        for row in range(self.results_list.rowCount()):
-
-
-
-            item = self.results_list.item(row, 0)
-
-
-
-            if item and item.checkState() != Qt.CheckState.Checked:
-
-
-
-                all_selected = False
-
-
-
-                break
-
-
-
-
-
-
-
-        # Toggle state
-
-
-
-        if all_selected:
-
-
-
-            self.deselect_all_notes()
-
-
-
-        else:
-
-
-
-            self.select_all_notes()
-
-
-
-
-
-
-
-    def select_all_notes(self):
-
-
-
-        """Select all notes in the results list"""
-
-
-
-        if not hasattr(self, 'results_list'):
-
-
-
-            return
-
-
-
-
-
-
-
-        # Block signals to prevent multiple updates
-
-
-
-        self.results_list.blockSignals(True)
-
-
-
-        for row in range(self.results_list.rowCount()):
-
-
-
-            item = self.results_list.item(row, 0)
-
-
-
-            if item:
-
-
-
-                item.setCheckState(Qt.CheckState.Checked)
-
-
-
-                # Store in persistence
-
-
-
-                note_id = item.data(Qt.ItemDataRole.UserRole)
-
-
-
-                if note_id:
-
-
-
-                    self.selected_note_ids.add(note_id)
-
-
-
-        self.results_list.blockSignals(False)
-
-
-
-
-
-
-
-        self.update_selection_count()
-
-
-
-        tooltip(f"\u2713 Selected all {self.results_list.rowCount()} notes")
-
-
-
-
-
-
-
-    def deselect_all_notes(self):
-
-
-
-        """Deselect all notes in the results list"""
-
-
-
-        if not hasattr(self, 'results_list'):
-
-
-
-            return
-
-
-
-
-
-
-
-        # Block signals to prevent multiple updates
-
-
-
-        self.results_list.blockSignals(True)
-
-
-
-        for row in range(self.results_list.rowCount()):
-
-
-
-            item = self.results_list.item(row, 0)
-
-
-
-            if item:
-
-
-
-                item.setCheckState(Qt.CheckState.Unchecked)
-
-
-
-                # Remove from persistence
-
-
-
-                note_id = item.data(Qt.ItemDataRole.UserRole)
-
-
-
-                if note_id:
-
-
-
-                    self.selected_note_ids.discard(note_id)
-
-
-
-        self.results_list.blockSignals(False)
-
-
-
-
-
-
-
-        self.update_selection_count()
-
-
-
-        tooltip(f"\xe2\u0153\u2014 Deselected all notes")
-
-
-
-
-
-
-
-    def restore_selections(self):
-
-
-
-        """Restore selections from stored note IDs"""
-
-
-
-        if not hasattr(self, 'selected_note_ids') or not self.selected_note_ids:
-
-
-
-            return
-
-
-
-
-
-
-
-        # Block signals to prevent multiple updates
-
-
-
-        self.results_list.blockSignals(True)
-
-
-
-        for row in range(self.results_list.rowCount()):
-
-
-
-            item = self.results_list.item(row, 0)
-
-
-
-            if item:
-
-
-
-                note_id = item.data(Qt.ItemDataRole.UserRole)
-
-
-
-                if note_id in self.selected_note_ids:
-
-
-
-                    item.setCheckState(Qt.CheckState.Checked)
-
-
-
-        self.results_list.blockSignals(False)
-
-
-
-
-
-
-
-    def open_selected_in_browser(self):
-
-
-
-        checked_ids = []
-
-
-
-        for row in range(self.results_list.rowCount()):
-
-
-
-            item = self.results_list.item(row, 0)
-
-
-
-            if item and item.checkState() == Qt.CheckState.Checked:
-
-
-
-                note_id = item.data(Qt.ItemDataRole.UserRole)
-
-
-
-                checked_ids.append(str(note_id))
-
-
-
-
-
-
-
-        if not checked_ids:
-
-
-
-            tooltip("Please check at least one note to view")
-
-
-
-            return
-
-
-
-
-
-
-
-        browser = dialogs.open("Browser", mw)
-
-
-
-        search_query = "nid:" + ",".join(checked_ids)
-
-
-
-        browser.form.searchEdit.lineEdit().setText(search_query)
-
-
-
-        browser.onSearchActivated()
-
-
-
-        QTimer.singleShot(150, lambda b=browser: self._bring_browser_to_front(b))
-
-
-
-        tooltip(f"\u2713 Opened {len(checked_ids)} selected notes in browser")
-
-
-
-
-
-
-
-    def open_all_in_browser(self):
-
-
-
-        if self.results_list.rowCount() == 0:
-
-
-
-            tooltip("No notes to view")
-
-
-
-            return
-
-
-
-
-
-
-
-        note_ids = []
-
-
-
-        for row in range(self.results_list.rowCount()):
-
-
-
-            item = self.results_list.item(row, 0)
-
-
-
-            if item:
-
-
-
-                note_id = item.data(Qt.ItemDataRole.UserRole)
-
-
-
-                note_ids.append(str(note_id))
-
-
-
-
-
-
-
-        browser = dialogs.open("Browser", mw)
-
-
-
-        search_query = "nid:" + ",".join(note_ids)
-
-
-
-        browser.form.searchEdit.lineEdit().setText(search_query)
-
-
-
-        browser.onSearchActivated()
-
-
-
-        QTimer.singleShot(150, lambda b=browser: self._bring_browser_to_front(b))
-
-
-
-        tooltip(f"\u2713 Opened {len(note_ids)} notes in browser")
-
-
-
-
-
-
-
-    def open_in_browser(self, item):
-
-
-
-        """Open note in browser when double-clicked"""
-
-
-
-        # Get the row of the clicked item
-
-
-
-        row = item.row()
-
-
-
-        # Get note ID from the hidden selection-data column.
-
-
-
-        content_item = self.results_list.item(row, 0)
-
-
-
-        if content_item:
-
-
-
-            note_id = content_item.data(Qt.ItemDataRole.UserRole)
-
-
-
-            browser = dialogs.open("Browser", mw)
-
-
-
-            browser.form.searchEdit.lineEdit().setText(f"nid:{note_id}")
-
-
-
-            browser.onSearchActivated()
-
-
-
-            QTimer.singleShot(150, lambda b=browser: self._bring_browser_to_front(b))
-
-
-
-            tooltip("\u2713 Note opened in browser")
-
-
-    def _show_note_preview_for_cell(self, row, column):
-        if column != 2 or not hasattr(self, '_note_preview_popup'):
-            if hasattr(self, '_note_preview_popup'):
-                self._note_preview_popup.hide()
-            return
-
-        item = self.results_list.item(row, column)
-        if not item:
-            self._note_preview_popup.hide()
-            return
-
-        note_info = item.data(Qt.ItemDataRole.UserRole + 3)
-        if not isinstance(note_info, dict):
-            self._note_preview_popup.hide()
-            return
-
-        self._note_preview_popup.show_note(note_info)
-
-
 # ============================================================================
 # Dynamic Method Compatibility Wiring
 # ============================================================================
 
 _AISEARCH_METHODS_FROM_WORKER = (
-    '_get_answer_source_text', '_get_embedding_source_text', '_get_rerank_source_text', '_build_result_source_text',
-    '_init_search_research_report', '_research_stage', '_write_search_research_report',
-    '_on_embedding_search_progress', '_show_busy_progress', '_show_centile_progress',
-    '_start_estimated_progress_timer', '_stop_estimated_progress_timer', '_hide_busy_progress', '_on_embedding_search_finished',
+    '_on_embedding_search_finished',
     '_on_keyword_filter_continue_done', '_on_embedding_search_error', '_on_rerank_done', '_on_get_notes_done', '_on_keyword_filter_done',
     '_perform_search_continue', 'perform_search',
     '_mmr_token_set', '_apply_mmr_diversity',
     '_on_relevance_rerank_done', '_display_answer_and_notes_after_rerank', '_on_relevance_rerank_done_stream', '_finish_anthropic_stream_display',
     '_on_ask_ai_success', '_on_ask_ai_error', '_on_ask_ai_worker_finished',
-    '_rerank_with_cross_encoder', 'keyword_filter', 'keyword_filter_continue', 'get_best_model',
+    '_rerank_with_cross_encoder', 'keyword_filter', 'keyword_filter_continue',
     '_local_context_usage_plan', '_fit_context_lines_to_token_budget',
     'ask_ai', 'call_ollama', 'call_anthropic', 'call_openai', 'call_google', 'call_openrouter',
-    'call_custom', '_openai_compatible_chat_url', 'make_request', 'parse_response', '_rerank_by_relevance_to_answer', 'filter_and_display_notes', '_get_matching_terms_for_note', 'update_selection_count',
+    'call_custom', '_openai_compatible_chat_url', 'make_request', 'parse_response', '_rerank_by_relevance_to_answer', 'filter_and_display_notes', '_get_matching_terms_for_note',
     '_start_anthropic_stream', '_append_stream_chunk', '_on_anthropic_stream_done', '_on_anthropic_stream_error',
-    'toggle_select_all', 'select_all_notes', 'deselect_all_notes',
-    'restore_selections', '_bring_browser_to_front', 'open_selected_in_browser', 'open_all_in_browser', 'open_in_browser',
-    '_show_note_preview_for_cell',
 )
 
 

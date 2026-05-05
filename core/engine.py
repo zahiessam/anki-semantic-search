@@ -529,7 +529,7 @@ def analyze_note_eligibility(ntf):
             }
 
         enabled = ntf.get("enabled_note_types")
-        enabled_set = set(enabled) if enabled else None
+        enabled_set = None if enabled is None else set(enabled or [])
         search_all = bool(ntf.get("search_all_fields", False))
         ntf_fields = ntf.get("note_type_fields") or {}
         use_first = bool(ntf.get("use_first_field_fallback", True))
@@ -883,7 +883,7 @@ def note_has_embedding(note_id, db_path=None, engine_id=None, any_engine=False):
         return False
 
 
-def load_embedding_key_index(engine_id=None, db_path=None):
+def load_embedding_key_index(engine_id=None, db_path=None, include_note_timestamps=False):
     """Return existing exact embedding keys and note ids for fast index refreshes."""
     try:
         import sqlite3
@@ -892,27 +892,39 @@ def load_embedding_key_index(engine_id=None, db_path=None):
         db_path = db_path or get_embeddings_db_path()
         exact_keys = set()
         note_ids_any_engine = set()
+        note_timestamps = {}
 
         if not os.path.exists(db_path):
+            if include_note_timestamps:
+                return exact_keys, note_ids_any_engine, note_timestamps
             return exact_keys, note_ids_any_engine
 
         conn = sqlite3.connect(db_path, timeout=30)
         try:
             _embeddings_db_ensure_table(conn)
             placeholders = ",".join("?" for _ in engine_candidates)
-            for note_id, content_hash in conn.execute(
-                f"SELECT note_id, content_hash FROM embeddings WHERE engine_id IN ({placeholders})",
+            for note_id, content_hash, timestamp in conn.execute(
+                f"SELECT note_id, content_hash, timestamp FROM embeddings WHERE engine_id IN ({placeholders})",
                 engine_candidates,
             ):
-                exact_keys.add((int(note_id), str(content_hash)))
+                note_id = int(note_id)
+                exact_keys.add((note_id, str(content_hash)))
+                if include_note_timestamps:
+                    ts = str(timestamp or "")
+                    if ts and ts > note_timestamps.get(note_id, ""):
+                        note_timestamps[note_id] = ts
             for (note_id,) in conn.execute("SELECT DISTINCT note_id FROM embeddings"):
                 note_ids_any_engine.add(int(note_id))
         finally:
             conn.close()
 
+        if include_note_timestamps:
+            return exact_keys, note_ids_any_engine, note_timestamps
         return exact_keys, note_ids_any_engine
     except Exception as exc:
         log_debug(f"Error loading embedding key index: {exc}")
+        if include_note_timestamps:
+            return set(), set(), {}
         return set(), set()
 
 
@@ -1010,7 +1022,29 @@ def migrate_embeddings_json_to_db():
 # Embedding Checkpoints And Error Classification
 # ============================================================================
 
-def save_checkpoint(processed_note_ids, total_notes, errors=0, engine_id=None):
+def make_embedding_scope_id(ntf):
+    """Stable fingerprint for the note/deck/field scope used by an embedding run."""
+    ntf = ntf or {}
+    fields = ntf.get("note_type_fields") or {}
+    payload = {
+        "enabled_note_types": None
+        if ntf.get("enabled_note_types") is None
+        else sorted(str(name) for name in (ntf.get("enabled_note_types") or [])),
+        "enabled_decks": None
+        if ntf.get("enabled_decks") is None
+        else sorted(str(name) for name in (ntf.get("enabled_decks") or [])),
+        "note_type_fields": {
+            str(model): sorted(str(field) for field in (field_names or []))
+            for model, field_names in sorted(fields.items())
+        },
+        "search_all_fields": bool(ntf.get("search_all_fields", False)),
+        "use_first_field_fallback": bool(ntf.get("use_first_field_fallback", True)),
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def save_checkpoint(processed_note_ids, total_notes, errors=0, engine_id=None, scope_id=None):
     try:
         if engine_id is None:
             engine_id = get_embedding_engine_id()
@@ -1021,6 +1055,7 @@ def save_checkpoint(processed_note_ids, total_notes, errors=0, engine_id=None):
             "processed_count": len(processed_note_ids),
             "errors": errors,
             "engine_id": engine_id,
+            "scope_id": scope_id,
             "timestamp": datetime.datetime.now().isoformat(),
         }
         temp_path = checkpoint_path + ".tmp"

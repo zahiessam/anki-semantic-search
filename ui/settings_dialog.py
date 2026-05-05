@@ -5,6 +5,7 @@
 # ============================================================================
 
 import os
+import glob
 import sqlite3
 
 try:
@@ -44,6 +45,7 @@ from ..core.engine import (
     get_deck_names,
     get_embedding_engine_id,
     get_embedding_for_query,
+    make_embedding_scope_id,
     get_models_with_fields,
     get_notes_count_per_deck,
     get_notes_count_per_model,
@@ -660,8 +662,6 @@ class SettingsDialog(QDialog):
 
 
         # 4. Note Types & Fields
-
-        self.include_all_note_types_cb.setChecked(True)
 
         self.include_all_decks_cb.setChecked(True)
 
@@ -1995,19 +1995,21 @@ class SettingsDialog(QDialog):
 
 
 
-        nt_select_btn = QPushButton("Select All")
+        nt_select_btn = QPushButton("Select all note types")
+        nt_select_btn.setToolTip("Select every note type currently listed.")
 
 
 
-        nt_select_btn.clicked.connect(lambda: self._set_note_types_checked(True))
+        nt_select_btn.clicked.connect(lambda: self._set_note_types_checked(True, manual=True))
 
 
 
-        nt_deselect_btn = QPushButton("Deselect All")
+        nt_deselect_btn = QPushButton("Deselect all note types")
+        nt_deselect_btn.setToolTip("Clear every note type currently listed, then choose only the ones you want.")
 
 
 
-        nt_deselect_btn.clicked.connect(lambda: self._set_note_types_checked(False))
+        nt_deselect_btn.clicked.connect(lambda: self._set_note_types_checked(False, manual=True))
 
 
 
@@ -2067,22 +2069,6 @@ class SettingsDialog(QDialog):
 
 
 
-        self.include_all_note_types_cb = QCheckBox("Include all note types")
-
-
-
-        self.include_all_note_types_cb.setChecked(True)
-
-
-
-        self.include_all_note_types_cb.stateChanged.connect(self._on_include_all_note_types_toggled)
-
-
-
-        nt_gl.addWidget(self.include_all_note_types_cb)
-
-
-
         self.note_types_table = QTableWidget()
 
 
@@ -2123,7 +2109,7 @@ class SettingsDialog(QDialog):
 
 
 
-        self.note_types_table.itemChanged.connect(self._update_field_groups_enabled)
+        self.note_types_table.itemChanged.connect(self._on_note_type_item_changed)
 
 
 
@@ -2343,6 +2329,7 @@ class SettingsDialog(QDialog):
 
 
         self.use_first_field_cb.setToolTip("If a note type has no checked fields, use its first field instead of skipping.")
+        self.use_first_field_cb.stateChanged.connect(lambda *_: self._persist_note_type_filter())
 
 
 
@@ -2718,6 +2705,13 @@ class SettingsDialog(QDialog):
         self.create_embedding_btn.clicked.connect(self._create_or_update_embeddings)
 
         index_btns.addWidget(self.create_embedding_btn)
+
+        self.clean_embedding_storage_btn = QPushButton("Clean embedding storage")
+        self.clean_embedding_storage_btn.setToolTip(
+            "Remove old separate embedding files and stale rows for deleted notes. Keeps all engines inside the active DB."
+        )
+        self.clean_embedding_storage_btn.clicked.connect(self._clean_embedding_storage)
+        index_btns.addWidget(self.clean_embedding_storage_btn)
 
         index_layout.addLayout(index_btns)
 
@@ -3643,7 +3637,7 @@ class SettingsDialog(QDialog):
 
 
 
-        ntf = config.get('note_type_filter', {})
+        ntf = self._resolve_note_type_filter_from_config(config, persist=True)
 
 
 
@@ -3674,6 +3668,24 @@ class SettingsDialog(QDialog):
 
 
     # --- Config Loading And Preset Application ---
+
+    def _resolve_note_type_filter_from_config(self, config, persist=False):
+        """Use the selected preset when the active note filter was accidentally saved empty."""
+        ntf = dict(config.get('note_type_filter') or {})
+        enabled = ntf.get('enabled_note_types')
+        current_name = config.get('current_preset_name')
+        presets = config.get('saved_presets') or {}
+        preset = presets.get(current_name) if current_name else None
+        if enabled == [] and preset and preset.get('enabled_note_types'):
+            ntf = dict(preset)
+            config['note_type_filter'] = ntf
+            log_debug(f"Restored note_type_filter from current preset '{current_name}' because active note types were empty")
+            if persist:
+                try:
+                    save_config(config)
+                except Exception as exc:
+                    log_debug(f"Could not persist restored note_type_filter preset: {exc}")
+        return ntf
 
     def _safe_set_checked(self, widget, value):
 
@@ -4814,7 +4826,7 @@ class SettingsDialog(QDialog):
             self._refresh_preset_combos()
             try:
                 cfg = load_config()
-                self._apply_note_type_config(cfg.get('note_type_filter', {}))
+                self._apply_note_type_config(self._resolve_note_type_filter_from_config(cfg, persist=True))
             except Exception as e:
                 log_debug(f"Error applying note_type_filter after Note Types tab populate: {e}")
             elapsed = time.time() - start
@@ -4966,6 +4978,9 @@ class SettingsDialog(QDialog):
 
 
 
+        was_applying = getattr(self, '_applying_note_type_config', False)
+        self._applying_note_type_config = True
+
         try:
 
 
@@ -5084,6 +5099,10 @@ class SettingsDialog(QDialog):
 
             log_debug(f"Error in _populate_note_type_lists: {e}")
 
+        finally:
+
+            self._applying_note_type_config = was_applying
+
 
 
 
@@ -5138,35 +5157,27 @@ class SettingsDialog(QDialog):
 
 
 
-            included = None
+            included = set()
 
 
 
-            if not self.include_all_note_types_cb.isChecked():
+            for i in range(self.note_types_table.rowCount()):
 
 
 
-                included = set()
+                it = self.note_types_table.item(i, 0)
 
 
 
-                for i in range(self.note_types_table.rowCount()):
+                if it and it.checkState() == Qt.CheckState.Checked:
 
 
 
-                    it = self.note_types_table.item(i, 0)
+                    included_name = it.data(Qt.ItemDataRole.UserRole) or it.text().strip()
 
 
 
-                    if it and it.checkState() == Qt.CheckState.Checked:
-
-
-
-                        included_name = it.data(Qt.ItemDataRole.UserRole) or it.text().strip()
-
-
-
-                        included.add(included_name)
+                    included.add(included_name)
 
 
 
@@ -5174,7 +5185,7 @@ class SettingsDialog(QDialog):
 
 
 
-                is_included = included is None or model_name in included
+                is_included = model_name in included
 
 
 
@@ -5207,6 +5218,10 @@ class SettingsDialog(QDialog):
 
 
                         self._wheel_guarded_widgets.add(cb)
+
+
+
+                    cb.stateChanged.connect(lambda *_: self._persist_note_type_filter())
 
 
 
@@ -6370,69 +6385,31 @@ class SettingsDialog(QDialog):
 
         enabled = ntf.get('enabled_note_types')
 
+        # None is the legacy "include all" value; represent it by checking all
+        # current note types instead of showing a separate include-all checkbox.
+        enabled_set = None if enabled is None else set(enabled or [])
 
-
-        # Interpretation:
-
-
-
-        #   None        -> include all note types
-
-
-
-        #   [] (empty)  -> user has not chosen any specific types yet
+        for i in range(self.note_types_table.rowCount()):
 
 
 
-        #                  (start with none selected to reduce workload)
+            it = self.note_types_table.item(i, 0)
 
 
 
-        include_all_nt = (enabled is None)
+            if it:
 
 
 
-        self.include_all_note_types_cb.setChecked(include_all_nt)
+                name = it.data(Qt.ItemDataRole.UserRole) or it.text().strip()
 
 
 
-        self._on_include_all_note_types_toggled()
-
-
-
-        if not include_all_nt and enabled:
-
-
-
-            enabled_set = set(enabled)
-
-
-
-            for i in range(self.note_types_table.rowCount()):
-
-
-
-                it = self.note_types_table.item(i, 0)
-
-
-
-                if it:
-
-
-
-                    name = it.data(Qt.ItemDataRole.UserRole) or it.text().strip()
-
-
-
-                    it.setCheckState(Qt.CheckState.Checked if (name in enabled_set) else Qt.CheckState.Unchecked)
-
-
-
-        else:
-
-
-
-            self._set_note_types_checked(True)
+                it.setCheckState(
+                    Qt.CheckState.Checked
+                    if (enabled_set is None or name in enabled_set)
+                    else Qt.CheckState.Unchecked
+                )
 
 
 
@@ -6628,43 +6605,27 @@ class SettingsDialog(QDialog):
 
 
 
-        include_all = self.include_all_note_types_cb.isChecked()
+        included = set()
 
 
 
-        if include_all:
+        for i in range(self.note_types_table.rowCount()):
 
 
 
-            included = None
+            it = self.note_types_table.item(i, 0)
 
 
 
-        else:
+            if it and it.checkState() == Qt.CheckState.Checked:
 
 
 
-            included = set()
+                name = it.data(Qt.ItemDataRole.UserRole) or it.text().strip()
 
 
 
-            for i in range(self.note_types_table.rowCount()):
-
-
-
-                it = self.note_types_table.item(i, 0)
-
-
-
-                if it and it.checkState() == Qt.CheckState.Checked:
-
-
-
-                    name = it.data(Qt.ItemDataRole.UserRole) or it.text().strip()
-
-
-
-                    included.add(name)
+                included.add(name)
 
 
 
@@ -6672,7 +6633,7 @@ class SettingsDialog(QDialog):
 
 
 
-            is_included = included is None or model_name in included
+            is_included = model_name in included
 
             gb.setEnabled(is_included)
 
@@ -6729,21 +6690,11 @@ class SettingsDialog(QDialog):
                 layout.addWidget(gb)
 
 
-    def _on_include_all_note_types_toggled(self):
-
-
-
-        self.note_types_table.setEnabled(not self.include_all_note_types_cb.isChecked())
-
-
-
+    def _on_note_type_item_changed(self, item):
+        """Persist note type checkbox changes immediately."""
         self._update_field_groups_enabled()
-
-
-
-
-
-
+        if item and item.column() == 0:
+            self._persist_note_type_filter()
 
     def _on_sort_note_types_changed(self, index):
 
@@ -6798,36 +6749,13 @@ class SettingsDialog(QDialog):
 
 
     def _on_search_all_fields_toggled(self):
-
-
-
         en = not self.search_all_fields_cb.isChecked()
-
-
-
         self.fields_by_note_type_scroll.setEnabled(en)
-
-
-
         for cbs in self._field_cbs.values():
-
-
-
             for cb in cbs.values():
-
-
-
                 cb.setEnabled(en)
-
-
-
         self._update_field_groups_enabled()
-
-
-
-
-
-
+        self._persist_note_type_filter()
 
     def _on_include_all_decks_toggled(self):
 
@@ -6925,8 +6853,7 @@ class SettingsDialog(QDialog):
 
 
 
-    def _set_note_types_checked(self, checked):
-
+    def _set_note_types_checked(self, checked, manual=False):
 
 
         state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
@@ -6946,6 +6873,10 @@ class SettingsDialog(QDialog):
 
 
                 it.setCheckState(state)
+
+        if manual:
+
+            self._persist_note_type_filter()
 
 
 
@@ -7061,11 +6992,7 @@ class SettingsDialog(QDialog):
 
 
 
-        include_all_nt = self.include_all_note_types_cb.isChecked()
-
-
-
-        enabled_nt = None if include_all_nt else [self.note_types_table.item(i, 0).data(Qt.ItemDataRole.UserRole) or self.note_types_table.item(i, 0).text().strip() for i in range(self.note_types_table.rowCount()) if self.note_types_table.item(i, 0) and self.note_types_table.item(i, 0).checkState() == Qt.CheckState.Checked]
+        enabled_nt = [self.note_types_table.item(i, 0).data(Qt.ItemDataRole.UserRole) or self.note_types_table.item(i, 0).text().strip() for i in range(self.note_types_table.rowCount()) if self.note_types_table.item(i, 0) and self.note_types_table.item(i, 0).checkState() == Qt.CheckState.Checked]
 
 
 
@@ -7325,6 +7252,7 @@ class SettingsDialog(QDialog):
 
 
         config['current_preset_name'] = name
+        config['note_type_filter'] = dict(presets[name] or {})
 
 
 
@@ -8122,6 +8050,11 @@ class SettingsDialog(QDialog):
 
 
             note_type_filter = self._build_ntf_from_ui()
+            if note_type_filter.get('enabled_note_types') == []:
+                restored_ntf = self._resolve_note_type_filter_from_config(current_config)
+                if restored_ntf.get('enabled_note_types'):
+                    note_type_filter = restored_ntf
+                    log_debug("Save settings kept current preset note_type_filter because UI note type selection was empty")
 
 
 
@@ -11863,6 +11796,136 @@ if (-not $isAdmin) {{
 
 
 
+    def _count_indexed_eligible_notes(self, engine_id, eligible_ids):
+        """Count eligible notes that already have an embedding for this engine."""
+        if not eligible_ids:
+            return 0
+        db_path = get_embeddings_db_path()
+        if not os.path.exists(db_path):
+            return 0
+        try:
+            conn = sqlite3.connect(db_path, timeout=10)
+            try:
+                indexed = 0
+                eligible_ids = list(eligible_ids)
+                for start in range(0, len(eligible_ids), 900):
+                    chunk = eligible_ids[start:start + 900]
+                    placeholders = ",".join("?" for _ in chunk)
+                    params = [engine_id] + chunk
+                    indexed += conn.execute(
+                        f"SELECT COUNT(DISTINCT note_id) FROM embeddings "
+                        f"WHERE engine_id = ? AND note_id IN ({placeholders})",
+                        params,
+                    ).fetchone()[0]
+                return indexed
+            finally:
+                conn.close()
+        except Exception as exc:
+            log_debug(f"Could not count indexed eligible notes: {exc}")
+            return 0
+
+
+    def _clean_embedding_storage(self):
+        active_db = os.path.abspath(get_embeddings_db_path())
+        user_dir = os.path.dirname(active_db)
+        if not os.path.isdir(user_dir):
+            showInfo("No embedding storage folder was found.")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Clean Embedding Storage",
+            "This will remove old separate embedding files and stale rows for deleted Anki notes.\n\n"
+            "It will keep the active embedding database and all engines inside it.\n\n"
+            "Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        removed_files = []
+        removed_file_bytes = 0
+        patterns = [
+            os.path.join(user_dir, "embeddings_*.db"),
+            os.path.join(user_dir, "embeddings_*.db.bak-*"),
+            os.path.join(user_dir, "embeddings_cache*.json"),
+            os.path.join(user_dir, "embeddings_cache*.json.bak-*"),
+        ]
+        active_storage = os.path.abspath(get_embeddings_storage_path_for_read())
+        for pattern in patterns:
+            for path in glob.glob(pattern):
+                abs_path = os.path.abspath(path)
+                if abs_path in (active_db, active_storage):
+                    continue
+                if not abs_path.startswith(os.path.abspath(user_dir) + os.sep):
+                    continue
+                try:
+                    size = os.path.getsize(abs_path)
+                    os.remove(abs_path)
+                    removed_files.append(os.path.basename(abs_path))
+                    removed_file_bytes += size
+                except Exception as exc:
+                    log_debug(f"Embedding storage cleanup could not delete {abs_path}: {exc}")
+
+        deleted_note_rows = 0
+        stale_duplicate_rows = 0
+        active_db_size_before = os.path.getsize(active_db) if os.path.exists(active_db) else 0
+        active_db_size_after = active_db_size_before
+        if os.path.exists(active_db):
+            try:
+                current_note_ids = set(int(nid) for (nid,) in mw.col.db.execute("select id from notes"))
+                conn = sqlite3.connect(active_db, timeout=30)
+                try:
+                    rows = conn.execute("SELECT rowid, engine_id, note_id, timestamp FROM embeddings").fetchall()
+                    delete_rowids = []
+                    newest_by_engine_note = {}
+                    for rowid, engine_id, note_id, timestamp in rows:
+                        note_id = int(note_id)
+                        if note_id not in current_note_ids:
+                            delete_rowids.append((rowid,))
+                            deleted_note_rows += 1
+                            continue
+                        key = (engine_id, note_id)
+                        previous = newest_by_engine_note.get(key)
+                        current_sort = str(timestamp or "")
+                        if previous is None or current_sort >= previous[0]:
+                            if previous is not None:
+                                delete_rowids.append((previous[1],))
+                                stale_duplicate_rows += 1
+                            newest_by_engine_note[key] = (current_sort, rowid)
+                        else:
+                            delete_rowids.append((rowid,))
+                            stale_duplicate_rows += 1
+                    if delete_rowids:
+                        conn.executemany("DELETE FROM embeddings WHERE rowid = ?", delete_rowids)
+                        conn.commit()
+                        conn.execute("VACUUM")
+                        conn.commit()
+                finally:
+                    conn.close()
+                active_db_size_after = os.path.getsize(active_db)
+            except Exception as exc:
+                log_debug(f"Embedding active DB cleanup failed: {exc}", is_error=True)
+                showInfo(f"Embedding storage cleanup partly failed:\n\n{exc}")
+                return
+
+        saved_mb = (removed_file_bytes + max(0, active_db_size_before - active_db_size_after)) / (1024 * 1024)
+        summary = (
+            "Embedding storage cleanup complete.\n\n"
+            f"Old separate files removed: {len(removed_files)}\n"
+            f"Rows for deleted notes removed: {deleted_note_rows:,}\n"
+            f"Duplicate/stale rows removed from active DB: {stale_duplicate_rows:,}\n"
+            f"Approx. space freed: {saved_mb:.1f} MB\n\n"
+            "All engines inside the active DB were kept."
+        )
+        log_debug(
+            f"Embedding storage cleanup: files={len(removed_files)}, deleted_note_rows={deleted_note_rows}, "
+            f"stale_duplicate_rows={stale_duplicate_rows}, saved_mb={saved_mb:.1f}"
+        )
+        showInfo(summary)
+
+
     def _create_or_update_embeddings(self):
 
 
@@ -12138,11 +12201,19 @@ if (-not $isAdmin) {{
 
 
 
-        current_ntf = self._build_ntf_from_ui()
-
-
-
         config = load_config()
+
+
+
+        current_ntf = self._build_ntf_from_ui()
+        if current_ntf.get('enabled_note_types') == []:
+            restored_ntf = self._resolve_note_type_filter_from_config(config, persist=True)
+            if restored_ntf.get('enabled_note_types'):
+                current_ntf = restored_ntf
+                try:
+                    self._apply_note_type_config(current_ntf)
+                except Exception as exc:
+                    log_debug(f"Could not re-apply restored preset before embedding: {exc}")
 
 
 
@@ -12211,6 +12282,9 @@ if (-not $isAdmin) {{
 
 
         current_engine_id = get_embedding_engine_id(runtime_config)
+        current_scope_id = make_embedding_scope_id(current_ntf)
+        eligible_ids = set(eligibility.get("eligible_note_ids") or [])
+        indexed_eligible = self._count_indexed_eligible_notes(current_engine_id, eligible_ids)
 
 
 
@@ -12220,6 +12294,64 @@ if (-not $isAdmin) {{
 
             checkpoint = None  # different engine: start fresh, don't offer resume
 
+
+
+        if checkpoint and checkpoint.get('scope_id') != current_scope_id:
+
+
+
+            log_debug(
+                "Ignoring embedding checkpoint because the selected note/deck/field scope changed"
+            )
+
+
+
+            clear_checkpoint()
+
+
+
+            checkpoint = None
+
+
+
+        if checkpoint and int(checkpoint.get('total_notes') or 0) != int(note_count):
+
+
+
+            log_debug(
+                "Ignoring embedding checkpoint because the selected note scope changed: "
+                f"{checkpoint.get('total_notes')} checkpoint notes vs {note_count} current eligible notes"
+            )
+
+
+
+            clear_checkpoint()
+
+
+
+            checkpoint = None
+
+
+
+        if indexed_eligible >= note_count:
+
+
+
+            if checkpoint:
+
+
+
+                log_debug(
+                    "Ignoring embedding checkpoint because the current engine already covers all eligible notes"
+                )
+
+
+
+                clear_checkpoint()
+
+
+
+                checkpoint = None
 
 
         if checkpoint:
@@ -12338,13 +12470,13 @@ if (-not $isAdmin) {{
 
 
 
-                f"This will generate embeddings for approximately {note_count:,} notes.\n\n"
+                f"This will scan approximately {note_count:,} notes and update only changed or missing embeddings.\n\n"
 
                 f"Currently excluded by filters: {len(eligibility.get('ineligible_notes', [])):,} notes.\n\n"
 
 
 
-                f"This may take a while depending on the number of notes.\n\n"
+                f"Unchanged notes should pass quickly.\n\n"
 
 
 
@@ -12440,7 +12572,7 @@ if (-not $isAdmin) {{
 
 
 
-        status_label = QLabel("Initializing embedding model...")
+        status_label = QLabel("Checking notes for embedding updates...")
 
 
 
@@ -12480,7 +12612,7 @@ if (-not $isAdmin) {{
 
 
 
-        detail_label = QLabel("Progress details will appear after the first batch...")
+        detail_label = QLabel("Checked 0/{:,} | Updated 0 | New 0 | Already current 0 | Pending 0 | ETA calculating...".format(note_count))
 
         detail_label.setWordWrap(True)
 
@@ -12929,6 +13061,11 @@ if (-not $isAdmin) {{
         batch_size = int(detail.get("batch_size") or 0)
 
         eta = detail.get("eta") or "calculating..."
+        processed = int(detail.get("processed") or 0)
+        refreshed = int(detail.get("refreshed") or 0)
+        skipped = int(detail.get("skipped") or 0)
+        errors = int(detail.get("errors") or 0)
+        pending = int(detail.get("pending_count") or 0)
 
         if progress_bar is not None and total:
 
@@ -12936,7 +13073,12 @@ if (-not $isAdmin) {{
 
         if detail_label is not None:
 
-            detail_label.setText(f"Batch {batch_size:,} notes/call | ETA {eta}")
+            error_part = f" | Errors {errors:,}" if errors else ""
+            detail_label.setText(
+                f"Checked {checked:,}/{total:,} | Updated {refreshed:,} | New {processed:,} | "
+                f"Already current {skipped:,} | Pending {pending:,} | ETA {eta}{error_part}"
+            )
+        QApplication.processEvents()
 
 
 
@@ -12984,6 +13126,18 @@ if (-not $isAdmin) {{
 
             pause_button.setVisible(False)
 
+        progress_bar = getattr(progress_dialog, '_progress_bar', None)
+        detail_label = getattr(progress_dialog, '_detail_label', None)
+        if progress_bar is not None:
+            progress_bar.setValue(note_count)
+            progress_bar.setFormat(f"{note_count:,}/{note_count:,} (100%)")
+        if detail_label is not None:
+            error_part = f" | Errors {errors:,}" if errors else ""
+            detail_label.setText(
+                f"Checked {note_count:,}/{note_count:,} | Updated {refreshed:,} | New {processed:,} | "
+                f"Already current {skipped:,} | Pending 0 | ETA done{error_part}"
+            )
+
 
 
 
@@ -12991,12 +13145,12 @@ if (-not $isAdmin) {{
 
 
         status_label.setText(
-            f"\u2705 Completed! New embeddings: {processed:,}, refreshed: {refreshed:,}, already present: {skipped:,} ({errors} errors)"
+            f"\u2705 Completed! New embeddings: {processed:,}, updated: {refreshed:,}, already current: {skipped:,} ({errors} errors)"
         )
 
 
 
-        log_text.append(f"\n\u2705 Embedding generation complete!")
+        log_text.append(f"\n\u2705 Embedding scan/update complete!")
 
 
 
@@ -13004,7 +13158,7 @@ if (-not $isAdmin) {{
 
         if refreshed > 0:
 
-            log_text.append(f"Existing embeddings refreshed: {refreshed:,} notes")
+            log_text.append(f"Existing embeddings updated: {refreshed:,} notes")
 
 
 
@@ -13012,7 +13166,7 @@ if (-not $isAdmin) {{
 
 
 
-            log_text.append(f"Skipped (already had embeddings): {skipped:,} notes")
+            log_text.append(f"Already current: {skipped:,} notes")
 
 
 
@@ -13058,25 +13212,11 @@ if (-not $isAdmin) {{
 
 
 
-        message = (
-            "Embedding generation complete!\n"
-            f"New embeddings created: {processed:,} notes\n"
-            f"Existing embeddings refreshed: {refreshed:,} notes\n"
-            f"Already present: {skipped:,} notes\n"
-            f"Errors: {errors}"
-        )
-
-
-
         if still_failed_count > 0:
 
 
 
-            message += f"\n\nWarning: {format_partial_failure_completion(still_failed_count)}"
-
-
-
-        showInfo(message)
+            showInfo(format_partial_failure_completion(still_failed_count))
 
 
 
