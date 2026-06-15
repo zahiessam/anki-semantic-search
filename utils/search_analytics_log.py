@@ -1,4 +1,4 @@
-"""Structured per-search research logging for retrieval/rerank comparisons."""
+﻿"""Structured per-search analytics logging for retrieval/rerank comparisons."""
 
 import datetime
 import json
@@ -12,13 +12,20 @@ from .paths import get_checkpoint_path
 MAX_CONTENT_CHARS = 500
 MAX_PROMPT_PREVIEW_CHARS = 4000
 MAX_ANSWER_PREVIEW_CHARS = 4000
-DEFAULT_MAX_RESEARCH_FILES = 50
-CITATION_RE = re.compile(r"\[([\d,\s]+)\]")
+DEFAULT_MAX_ANALYTICS_FILES = 50
+CITATION_RE = re.compile(r"\[((?:\d+[A-Za-z]?\s*,\s*)*\d+[A-Za-z]?)\]")
 RELEVANT_NOTES_RE = re.compile(r"RELEVANT_NOTES:\s*([^\n\r]+)", re.IGNORECASE)
 
 
-def research_log_dir():
-    path = os.path.join(os.path.dirname(get_checkpoint_path()), "search_research")
+def analytics_log_dir():
+    base = os.path.dirname(get_checkpoint_path())
+    path = os.path.join(base, "search_analytics")
+    old_path = os.path.join(base, "search_research")
+    if os.path.isdir(old_path) and not os.path.exists(path):
+        try:
+            os.rename(old_path, path)
+        except Exception as exc:
+            log_debug(f"Could not migrate search analytics directory {old_path} to {path}: {exc}")
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -43,20 +50,25 @@ def _scrub_config(value):
     return value
 
 
-def _research_settings(report):
+def _analytics_settings(report):
     config = (report or {}).get("config") or {}
     search_config = config.get("search_config") or {}
-    mode = (search_config.get("research_mode") or "compact").strip().lower()
+    mode = (search_config.get("analytics_mode") or search_config.get("research_mode") or "compact").strip().lower()
     if mode not in ("compact", "full"):
         mode = "compact"
     try:
-        max_files = int(search_config.get("max_research_files", DEFAULT_MAX_RESEARCH_FILES))
+        max_files = int(
+            search_config.get(
+                "max_analytics_files",
+                search_config.get("max_research_files", DEFAULT_MAX_ANALYTICS_FILES),
+            )
+        )
     except Exception:
-        max_files = DEFAULT_MAX_RESEARCH_FILES
+        max_files = DEFAULT_MAX_ANALYTICS_FILES
     return {
-        "enabled": bool(search_config.get("research_enabled", False)),
+        "enabled": bool(search_config.get("analytics_enabled", search_config.get("research_enabled", False))),
         "mode": mode,
-        "max_research_files": max(1, max_files),
+        "max_analytics_files": max(1, max_files),
     }
 
 
@@ -83,7 +95,11 @@ def compact_note_result(score, note, rank=None, mode="compact"):
         "_display_relevance",
         "_answer_relevance_score",
         "_keyword_score",
+        "_intent_boost",
         "_embedding_score",
+        "_agentic_pass",
+        "_agentic_queries",
+        "_possible_media",
         "chunk_index",
         "chunk_count",
     ):
@@ -139,11 +155,13 @@ def make_answer_payload(answer, context_note_ids=None, final_results=None, mode=
     text = str(answer or "")
     inline_refs = extract_inline_citation_refs(text)
     relevant_refs = extract_relevant_note_refs(text)
+    fallback_inline_refs = relevant_refs if relevant_refs and not inline_refs else []
     return {
         "answer_length": len(text),
         "answer": text if mode == "full" else _preview(text, MAX_ANSWER_PREVIEW_CHARS),
         "inline_citation_refs": inline_refs,
         "relevant_notes_refs": relevant_refs,
+        "fallback_inline_citation_refs": fallback_inline_refs,
         "citation_map": build_citation_map(
             sorted(set(inline_refs + relevant_refs)),
             context_note_ids or [],
@@ -157,8 +175,9 @@ def extract_inline_citation_refs(answer):
     for match in CITATION_RE.finditer(str(answer or "")):
         for part in match.group(1).split(","):
             part = part.strip()
-            if part.isdigit():
-                refs.append(int(part))
+            ref = re.match(r"(\d+)[A-Za-z]?$", part)
+            if ref:
+                refs.append(int(ref.group(1)))
     return refs
 
 
@@ -221,6 +240,7 @@ def compact_report_summary(report, run_path=None):
     stages = report.get("stages") or []
     final_results = report.get("final_results") or []
     answer = report.get("answer") or {}
+    relevance_threshold = report.get("relevance_threshold") or {}
     return {
         "run_id": report.get("run_id"),
         "started_at": report.get("started_at"),
@@ -233,15 +253,29 @@ def compact_report_summary(report, run_path=None):
         "answer_length": answer.get("answer_length") or report.get("final_answer_length"),
         "inline_citation_refs": answer.get("inline_citation_refs", []),
         "relevant_notes_refs": answer.get("relevant_notes_refs", []),
+        "fallback_inline_citation_refs": answer.get("fallback_inline_citation_refs", []),
         "cited_note_ids": report.get("cited_note_ids", []),
         "context_note_ids": report.get("context_note_ids", []),
+        "relevance_threshold": {
+            "threshold_percent": relevance_threshold.get("threshold_percent"),
+            "threshold_pct": relevance_threshold.get("threshold_pct"),
+            "threshold_source": relevance_threshold.get("threshold_source"),
+            "threshold_filtered_count": relevance_threshold.get("threshold_filtered_count"),
+            "pinned_count": relevance_threshold.get("pinned_count"),
+            "final_visible_count": relevance_threshold.get("final_visible_count"),
+            "visible": relevance_threshold.get("visible"),
+            "hidden_count": relevance_threshold.get("hidden_count"),
+            "hidden": relevance_threshold.get("hidden"),
+            "display_limit": relevance_threshold.get("display_limit"),
+            "selectable_count": relevance_threshold.get("selectable_count"),
+        },
         "top_final_note_ids": [row.get("note_id") for row in final_results[:20]],
         "stage_names": [stage.get("name") for stage in stages],
         "report_path": run_path,
     }
 
 
-def cleanup_old_research_reports(directory, max_files):
+def cleanup_old_analytics_reports(directory, max_files):
     try:
         candidates = []
         for name in os.listdir(directory):
@@ -256,28 +290,28 @@ def cleanup_old_research_reports(directory, max_files):
             try:
                 os.remove(path)
             except Exception as exc:
-                log_debug(f"Could not remove old search research report {path}: {exc}")
+                log_debug(f"Could not remove old search analytics report {path}: {exc}")
     except Exception as exc:
-        log_debug(f"Error cleaning search research reports: {exc}", is_error=True)
+        log_debug(f"Error cleaning search analytics reports: {exc}", is_error=True)
 
 
-def write_search_research_report(report):
+def write_search_analytics_report(report):
     """Write latest full report and append a JSONL snapshot for later comparison."""
     try:
         report = dict(report or {})
-        settings = _research_settings(report)
+        settings = _analytics_settings(report)
         if not settings["enabled"]:
             return None
         report["updated_at"] = datetime.datetime.now().isoformat()
         report["config"] = _scrub_config(report.get("config") or {})
         run_id = report.get("run_id") or new_search_run_id()
         report["run_id"] = run_id
-        report["research"] = {
+        report["analytics"] = {
             "mode": settings["mode"],
-            "max_research_files": settings["max_research_files"],
+            "max_analytics_files": settings["max_analytics_files"],
         }
 
-        directory = research_log_dir()
+        directory = analytics_log_dir()
         latest_path = os.path.join(directory, "latest_search_report.json")
         run_path = os.path.join(directory, f"{run_id}.json")
         jsonl_path = os.path.join(directory, "search_runs.jsonl")
@@ -288,8 +322,8 @@ def write_search_research_report(report):
 
         with open(jsonl_path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(compact_report_summary(report, run_path), ensure_ascii=False) + "\n")
-        cleanup_old_research_reports(directory, settings["max_research_files"])
+        cleanup_old_analytics_reports(directory, settings["max_analytics_files"])
         return run_path
     except Exception as exc:
-        log_debug(f"Error writing search research report: {exc}", is_error=True)
+        log_debug(f"Error writing search analytics report: {exc}", is_error=True)
         return None

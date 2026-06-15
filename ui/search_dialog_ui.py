@@ -8,10 +8,12 @@ from aqt.qt import *
 from aqt.utils import askUser, showInfo, tooltip
 
 from .search_dialog import ContentDelegate, RelevanceBarDelegate
+from .branding import CHATBOT_ICON, CHATBOT_NAME
 from .note_preview_popup import NotePreviewPopup
 from .theme import get_addon_theme
+from .image_attachments import ATTACHMENT_THUMBNAIL_SIZE
 from .widgets import SpellCheckPlainTextEdit, _get_spell_checker
-from ..utils import get_search_history_queries, load_config
+from ..utils import clamp_relevance_threshold_percent, get_search_history_queries, load_config
 
 
 # ============================================================================
@@ -20,69 +22,83 @@ from ..utils import get_search_history_queries, load_config
 
 _addon_theme = get_addon_theme
 
+
+def _panel_style(theme):
+    return (
+        f"background-color: {theme['section_bg']}; "
+        f"border: 1px solid {theme['subtle_border']}; "
+        "border-radius: 6px;"
+    )
+
+
+def _filter_strip_style(theme):
+    return (
+        f"background-color: {theme['panel_bg']}; "
+        f"border: 1px solid {theme['subtle_border']}; "
+        "border-radius: 5px;"
+    )
+
+
 def reset_to_medical_defaults(self):
 
-    """Resets all settings to high-yield medical defaults as suggested by Glutamine."""
+    """Compatibility wrapper; the active preset lives in SettingsRerankUiMixin."""
+    showInfo("Open Settings to apply the Clinical High-Yield preset.")
 
-    from aqt.utils import askUser
 
-    if not askUser("Reset all settings to high-yield clinical defaults (Resident-approved)?"):
+def _set_sources_toggle_text(self):
+    button = getattr(self, "sources_toggle_btn", None)
+    if button is None:
+        return
+    collapsed = bool(getattr(self, "_sources_collapsed", False))
+    button.setText("\u2039" if collapsed else "\u203a")
+    button.setToolTip("Show Sources" if collapsed else "Hide Sources")
 
+
+def _collapse_sources_panel(self, manual=False):
+    if not getattr(self, "use_side_by_side", False):
+        return
+    content = getattr(self, "results_container", None)
+    shell = getattr(self, "sources_shell", None)
+    splitter = getattr(self, "main_splitter", None)
+    if content is None or shell is None or splitter is None:
         return
 
+    if manual:
+        self._sources_manually_expanded = False
+    self._sources_collapsed = True
+    content.setVisible(False)
+    shell.setMinimumWidth(18)
+    shell.setMaximumWidth(18)
+    splitter.setSizes([max(800, self.width() - 18), 18])
+    _set_sources_toggle_text(self)
 
 
-    # 1. API & Provider Defaults
+def _expand_sources_panel(self, manual=False):
+    if not getattr(self, "use_side_by_side", False):
+        return
+    content = getattr(self, "results_container", None)
+    shell = getattr(self, "sources_shell", None)
+    splitter = getattr(self, "main_splitter", None)
+    if content is None or shell is None or splitter is None:
+        return
 
-    self.answer_provider_combo.setCurrentIndex(0) # Default to Ollama (Local)
-
-    self.local_llm_url.setText("http://localhost:1234/v1")
-
-    self.local_llm_model.setText("llama3.2")
-
-
-
-    # 2. Search & Embedding Defaults (Medical High-Yield)
-
-    self.search_method_combo.setCurrentIndex(2) # Hybrid (RRF) - Best for Med
-
-    self.min_relevance_spin.setValue(55) # Filter out noise
-
-    self.max_results_spin.setValue(50) # Comprehensive for medical use
-
-    self.hybrid_weight_spin.setValue(40) # Slightly favor keywords for drug names/genes
-
-    self.enable_query_expansion_cb.setChecked(True) # AI synonyms are great for medicine
-
-    self.use_ai_generic_term_detection_cb.setChecked(True)
+    if manual:
+        self._sources_manually_expanded = True
+    self._sources_collapsed = False
+    shell.setMaximumWidth(16777215)
+    shell.setMinimumWidth(260)
+    content.setVisible(True)
+    total = max(900, self.width())
+    sources_width = max(360, int(total * 0.42))
+    splitter.setSizes([max(360, total - sources_width), sources_width])
+    _set_sources_toggle_text(self)
 
 
-
-    # 3. Styling Defaults (Dark mode friendly)
-
-    self.question_font_spin.setValue(14)
-
-    self.answer_font_spin.setValue(13)
-
-    self.notes_font_spin.setValue(12)
-
-    self.layout_combo.setCurrentIndex(0) # Side-by-side
-
-
-
-    # 4. Note Types & Fields
-
-    self.include_all_note_types_cb.setChecked(True)
-
-    self.include_all_decks_cb.setChecked(True)
-
-    self.use_first_field_cb.setChecked(True)
-
-
-
-    from aqt.utils import showInfo
-
-    showInfo("Settings reset to Clinical High-Yield defaults. Click 'Save' to apply.")
+def _toggle_sources_panel(self):
+    if getattr(self, "_sources_collapsed", False):
+        _expand_sources_panel(self, manual=True)
+    else:
+        _collapse_sources_panel(self, manual=True)
 
 
 
@@ -98,7 +114,7 @@ def setup_ui(self):
 
 
 
-    root_layout.setContentsMargins(8, 8, 8, 8)
+    root_layout.setContentsMargins(6, 4, 6, 6)
 
 
 
@@ -122,7 +138,7 @@ def setup_ui(self):
 
 
 
-    layout.setContentsMargins(10, 8, 10, 8)
+    layout.setContentsMargins(8, 4, 8, 6)
 
 
 
@@ -143,6 +159,10 @@ def setup_ui(self):
 
 
     theme = _addon_theme(is_dark)
+    self._theme = theme
+    self._answer_font_size = self.styling_config.get('answer_font_size', 13)
+    if hasattr(self, "_init_search_chat_state"):
+        self._init_search_chat_state()
 
 
 
@@ -150,7 +170,7 @@ def setup_ui(self):
 
 
 
-    # Compact header: title + hint + scope banner + settings (shrunk)
+    # Compact header: keep metadata and settings out of the conversation lane.
 
 
 
@@ -158,27 +178,7 @@ def setup_ui(self):
 
 
 
-    title_label = QLabel("\U0001F50D Anki Semantic Search")
-
-
-
-    title_label.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {'#ffffff' if is_dark else '#2c3e50'};")
-
-
-
-    header_layout.addWidget(title_label)
-
-
-
-    hint_label = QLabel("Ask a question \u2192 AI answer from your notes")
-
-
-
-    hint_label.setStyleSheet(f"font-size: 10px; color: {'#95a5a6' if is_dark else '#7f8c8d'};")
-
-
-
-    header_layout.addWidget(hint_label)
+    header_layout.addStretch()
 
 
 
@@ -196,9 +196,13 @@ def setup_ui(self):
 
     header_layout.addWidget(self.scope_banner)
 
-
-
-    header_layout.addStretch()
+    self.review_context_banner = QLabel("")
+    self.review_context_banner.setStyleSheet(
+        f"font-size: 10px; color: {theme['teal']}; padding: 2px 8px; font-weight: 700;"
+    )
+    self.review_context_banner.setToolTip("Current review note context is available for Ask Notes and Find Related Notes.")
+    self.review_context_banner.setVisible(False)
+    header_layout.addWidget(self.review_context_banner)
 
 
 
@@ -230,15 +234,17 @@ def setup_ui(self):
 
 
 
-    # Search input (shrunk)
+    # Chat composer. It is built early so existing helpers can keep
+    # using self.search_input, then added directly under the answer box.
 
 
 
     search_container = QWidget()
+    search_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
 
 
-    search_container.setStyleSheet("background-color: rgba(52, 152, 219, 0.12); border-radius: 4px; padding: 4px 6px;")
+    search_container.setStyleSheet("background-color: transparent; border-radius: 0; padding: 0;")
 
 
 
@@ -246,11 +252,11 @@ def setup_ui(self):
 
 
 
-    search_layout.setSpacing(2)
+    search_layout.setSpacing(4)
 
 
 
-    search_layout.setContentsMargins(4, 4, 4, 4)
+    search_layout.setContentsMargins(2, 4, 2, 2)
 
 
 
@@ -262,11 +268,11 @@ def setup_ui(self):
 
 
 
-    search_label = QLabel("Search:")
+    search_label = QLabel("Ask:")
 
 
 
-    search_label.setToolTip("Type a question; matching notes will be found and the AI will answer using them. Ctrl+Enter to search.")
+    search_label.setToolTip("Type a question. Ask AI answers directly; Ask Notes searches your Anki notes with citations.")
 
 
 
@@ -282,7 +288,9 @@ def setup_ui(self):
 
 
 
-    search_input_layout = QHBoxLayout()
+    search_input_layout = QVBoxLayout()
+    search_input_layout.setSpacing(4)
+    search_input_layout.setContentsMargins(0, 0, 0, 0)
 
 
 
@@ -291,6 +299,8 @@ def setup_ui(self):
 
 
         self.search_input = SpellCheckPlainTextEdit()
+        if hasattr(self.search_input, "set_image_paste_callback"):
+            self.search_input.set_image_paste_callback(self._attach_composer_image_from_qimage)
 
 
 
@@ -302,7 +312,7 @@ def setup_ui(self):
 
 
 
-    self.search_input.setPlaceholderText("e.g., hypertension  or  causes of heart failure \u2014 Ctrl+Enter to search")
+    self.search_input.setPlaceholderText("Ask AI, or search your notes with Ask Notes...")
 
 
 
@@ -318,7 +328,7 @@ def setup_ui(self):
 
 
 
-    self.search_input.setToolTip(f"Type your question. Ctrl+Enter to search.{spell_hint}")
+    self.search_input.setToolTip(f"Type your question.{spell_hint}")
 
 
 
@@ -326,57 +336,235 @@ def setup_ui(self):
 
 
 
-    self.search_input.setStyleSheet(f"font-size: {question_font_size}px;")
+    self.search_input.setStyleSheet(
+        f"QPlainTextEdit {{ font-size: {question_font_size}px; border: 1px solid {theme['subtle_border']}; }}"
+        f"QPlainTextEdit:focus {{ border: 1px solid {theme['focus_border']}; }}"
+    )
 
-    # History dropdown for recent searches
+    # History dropdown for recent searches, with per-item delete buttons.
 
     self._search_history_model = QStringListModel(get_search_history_queries())
 
-    self.search_history_combo = QComboBox()
+    self.search_history_btn = QToolButton()
 
-    self.search_history_combo.setModel(self._search_history_model)
+    self.search_history_btn.setObjectName("searchHistoryBtn")
+    self.search_history_btn.setText("Recent")
 
-    self.search_history_combo.setEditable(False)
+    try:
 
-    self.search_history_combo.setMinimumWidth(80)
+        self.search_history_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
 
-    self.search_history_combo.setMaximumWidth(150)
+    except AttributeError:
 
-    self.search_history_combo.setToolTip("Recent searches \u2014 select to fill the search box, then click Search.")
+        self.search_history_btn.setPopupMode(QToolButton.InstantPopup)
 
-    self.search_history_combo.activated.connect(self._on_search_history_selected)
+    self.search_history_btn.setMinimumHeight(30)
+    self.search_history_btn.setMinimumWidth(72)
+
+    self.search_history_btn.setMaximumWidth(110)
+
+    self._rebuild_search_history_menu(self._search_history_model.stringList())
 
 
 
-    clear_history_btn = QPushButton("Clear history")
+    clear_history_btn = QPushButton("Clear")
+    clear_history_btn.setObjectName("clearHistoryBtn")
 
     clear_history_btn.setToolTip("Delete all search history")
 
-    clear_history_btn.setMaximumWidth(90)
+    clear_history_btn.setMinimumHeight(30)
+    clear_history_btn.setMaximumWidth(68)
 
     clear_history_btn.clicked.connect(self._on_clear_search_history)
 
 
+    self.selected_answer_context_chip = QFrame()
+    self.selected_answer_context_chip.setObjectName("selectedAnswerContextChip")
+    self.selected_answer_context_chip.setStyleSheet(
+        "QFrame#selectedAnswerContextChip {"
+        f"  background-color: {theme['control_bg']};"
+        f"  border: 1px solid {theme['subtle_border']};"
+        "  border-radius: 8px;"
+        "}"
+        "QLabel { background: transparent; border: none; }"
+        "QPushButton {"
+        "  background: transparent;"
+        "  border: none;"
+        "  border-radius: 7px;"
+        "  padding: 1px 5px;"
+        "  font-weight: bold;"
+        f"  color: {theme['quiet_text']};"
+        "}"
+        "QPushButton:hover {"
+        f"  background-color: {theme['panel_bg']};"
+        f"  color: {theme['text']};"
+        "}"
+    )
+    selected_context_layout = QHBoxLayout(self.selected_answer_context_chip)
+    selected_context_layout.setContentsMargins(8, 5, 6, 5)
+    selected_context_layout.setSpacing(6)
 
-    self.search_btn = QPushButton("\U0001F50D Search")
+    self.selected_answer_context_count_label = QLabel("1 selection")
+    self.selected_answer_context_count_label.setStyleSheet(
+        f"color: {theme['text']}; font-size: 11px; font-weight: 700;"
+    )
+    selected_context_layout.addWidget(self.selected_answer_context_count_label, 0)
+
+    self.selected_answer_context_preview_label = QLabel("")
+    self.selected_answer_context_preview_label.setStyleSheet(
+        f"color: {theme['quiet_text']}; font-size: 11px;"
+    )
+    self.selected_answer_context_preview_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    selected_context_layout.addWidget(self.selected_answer_context_preview_label, 1)
+
+    self.selected_answer_context_clear_btn = QPushButton("\u00d7")
+    self.selected_answer_context_clear_btn.setFixedSize(22, 22)
+    self.selected_answer_context_clear_btn.setToolTip("Remove selected text context")
+    self.selected_answer_context_clear_btn.clicked.connect(self._clear_composer_selected_answer_context)
+    selected_context_layout.addWidget(self.selected_answer_context_clear_btn, 0)
+
+    self.selected_answer_context_chip.hide()
+
+    self.composer_image_chip = QFrame()
+    self.composer_image_chip.setObjectName("composerImageChip")
+    self.composer_image_chip.setStyleSheet(
+        "QFrame#composerImageChip {"
+        f"  background-color: {theme['control_bg']};"
+        f"  border: 1px solid {theme['subtle_border']};"
+        "  border-radius: 8px;"
+        "}"
+        "QLabel { background: transparent; border: none; }"
+        "QPushButton {"
+        "  background: transparent;"
+        "  border: none;"
+        "  border-radius: 7px;"
+        "  padding: 1px 5px;"
+        "  font-weight: bold;"
+        f"  color: {theme['quiet_text']};"
+        "}"
+        "QPushButton:hover {"
+        f"  background-color: {theme['panel_bg']};"
+        f"  color: {theme['text']};"
+        "}"
+    )
+    image_chip_layout = QHBoxLayout(self.composer_image_chip)
+    image_chip_layout.setContentsMargins(8, 5, 6, 5)
+    image_chip_layout.setSpacing(7)
+    self.composer_image_thumb_label = QLabel()
+    self.composer_image_thumb_label.setFixedSize(ATTACHMENT_THUMBNAIL_SIZE, ATTACHMENT_THUMBNAIL_SIZE)
+    self.composer_image_thumb_label.setScaledContents(False)
+    image_chip_layout.addWidget(self.composer_image_thumb_label, 0)
+    self.composer_image_name_label = QLabel("")
+    self.composer_image_name_label.setWordWrap(False)
+    self.composer_image_name_label.setStyleSheet(f"color: {theme['text']}; font-size: 11px;")
+    self.composer_image_name_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    image_chip_layout.addWidget(self.composer_image_name_label, 1)
+    self.composer_image_clear_btn = QPushButton("\u00d7")
+    self.composer_image_clear_btn.setFixedSize(22, 22)
+    self.composer_image_clear_btn.setToolTip("Remove attached image")
+    self.composer_image_clear_btn.clicked.connect(self._clear_composer_image_attachment)
+    image_chip_layout.addWidget(self.composer_image_clear_btn, 0)
+    self.composer_image_chip.hide()
+
+
+    self.ask_ai_btn = QPushButton(f"{CHATBOT_ICON} Ask AI")
+    self.ask_ai_btn.setObjectName("askAiBtn")
+    self.ask_ai_btn.setMinimumHeight(32)
+    self.ask_ai_btn.setMinimumWidth(82)
+    self.ask_ai_btn.setToolTip("Answer using AI reasoning without searching notes or adding citations.")
+    self.ask_ai_btn.clicked.connect(self.ask_ai_direct_from_composer)
+
+    self.search_btn = QPushButton("\U0001F4DA Ask Notes")
+    self.ask_notes_btn = self.search_btn
 
     self.search_btn.setObjectName("searchBtn")
 
-    self.search_btn.setMinimumHeight(42)
+    self.search_btn.setMinimumHeight(32)
 
-    self.search_btn.setMinimumWidth(100)
+    self.search_btn.setMinimumWidth(92)
+    self.search_btn.setToolTip("Search your Anki notes and answer with citations.")
 
-    self.search_btn.clicked.connect(self.perform_search)
+    self.search_btn.clicked.connect(self._ask_notes_from_composer if hasattr(self, "_ask_notes_from_composer") else self.perform_search)
+
+    self.clear_chat_btn = QPushButton("Clear Chat")
+    self.clear_chat_btn.setObjectName("clearChatBtn")
+    self.clear_chat_btn.setMinimumHeight(32)
+    self.clear_chat_btn.setMinimumWidth(82)
+    self.clear_chat_btn.setToolTip("Clear this chat session. Saved search history is unchanged.")
+    self.clear_chat_btn.clicked.connect(self._clear_search_chat)
+
+    self.find_related_btn = QPushButton("\U0001F50E Find Related Notes")
+    self.find_related_btn.setObjectName("findRelatedBtn")
+    self.find_related_btn.setMinimumHeight(32)
+    self.find_related_btn.setToolTip("Search for notes related to the current review note.")
+    self.find_related_btn.clicked.connect(self.find_related_notes_from_review)
+    self.find_related_btn.setVisible(False)
 
 
 
-    search_input_layout.addWidget(self.search_input, 4) # Give much more stretch to input
+    search_input_layout.addWidget(self.selected_answer_context_chip)
+    search_input_layout.addWidget(self.composer_image_chip)
+    search_input_layout.addWidget(self.search_input)
 
-    search_input_layout.addWidget(self.search_history_combo, 1) # Keep history small
+    composer_actions_layout = QHBoxLayout()
+    composer_actions_layout.setSpacing(6)
+    composer_actions_layout.setContentsMargins(0, 0, 0, 0)
 
-    search_input_layout.addWidget(clear_history_btn)
-
-    search_input_layout.addWidget(self.search_btn)
+    composer_utility_strip = QFrame()
+    composer_utility_strip.setObjectName("composerUtilityStrip")
+    composer_utility_strip.setStyleSheet(
+        "QFrame#composerUtilityStrip {"
+        f"  background-color: {theme['section_bg']};"
+        f"  border: 1px solid {theme['subtle_border']};"
+        "  border-radius: 7px;"
+        "}"
+        "QFrame#composerUtilityStrip QToolButton,"
+        "QFrame#composerUtilityStrip QPushButton {"
+        "  background-color: transparent;"
+        f"  border: 1px solid transparent;"
+        f"  color: {theme['subtext']};"
+        "  border-radius: 5px;"
+        "  padding: 4px 8px;"
+        "  font-size: 12px;"
+        "  font-weight: 600;"
+        "}"
+        "QFrame#composerUtilityStrip QToolButton:hover,"
+        "QFrame#composerUtilityStrip QPushButton:hover {"
+        f"  background-color: {theme['panel_bg']};"
+        f"  border-color: {theme['control_hover_border']};"
+        f"  color: {theme['text']};"
+        "}"
+        "QFrame#composerUtilityStrip QToolButton:disabled,"
+        "QFrame#composerUtilityStrip QPushButton:disabled {"
+        "  background-color: transparent;"
+        f"  border-color: transparent;"
+        f"  color: {theme['quiet_text']};"
+        "}"
+        "QPushButton#attachImageBtn {"
+        "  padding: 0;"
+        f"  color: {theme['text']};"
+        "  font-size: 15px;"
+        "  font-weight: 700;"
+        "}"
+    )
+    utility_layout = QHBoxLayout(composer_utility_strip)
+    utility_layout.setContentsMargins(4, 4, 4, 4)
+    utility_layout.setSpacing(2)
+    utility_layout.addWidget(self.search_history_btn)
+    utility_layout.addWidget(clear_history_btn)
+    self.attach_image_btn = QPushButton("\U0001F4CE")
+    self.attach_image_btn.setObjectName("attachImageBtn")
+    self.attach_image_btn.setFixedSize(32, 30)
+    self.attach_image_btn.setToolTip("Attach image (PNG, JPG, WebP)")
+    self.attach_image_btn.clicked.connect(self._choose_composer_image_attachment)
+    utility_layout.addWidget(self.attach_image_btn)
+    composer_actions_layout.addWidget(composer_utility_strip)
+    composer_actions_layout.addStretch()
+    composer_actions_layout.addWidget(self.find_related_btn)
+    composer_actions_layout.addWidget(self.ask_ai_btn)
+    composer_actions_layout.addWidget(self.search_btn)
+    composer_actions_layout.addWidget(self.clear_chat_btn)
+    search_input_layout.addLayout(composer_actions_layout)
 
     search_layout.addLayout(search_input_layout)
 
@@ -385,40 +573,6 @@ def setup_ui(self):
 
 
 
-
-    # Shortcuts and History moved from sidebar to below search input
-
-
-
-    extra_info_layout = QHBoxLayout()
-
-
-
-    shortcuts_hint = QLabel("<b>Shortcuts:</b> Ctrl+Enter search | Ctrl+A select | Ctrl+D deselect")
-
-
-
-    shortcuts_hint.setStyleSheet(f"font-size: 10px; color: {theme['subtext']};")
-
-
-
-    extra_info_layout.addWidget(shortcuts_hint)
-
-
-
-    extra_info_layout.addStretch()
-
-
-
-    search_layout.addLayout(extra_info_layout)
-
-
-
-
-
-
-
-    layout.addWidget(search_container)
 
 
 
@@ -434,7 +588,7 @@ def setup_ui(self):
 
 
 
-    search_shortcut.activated.connect(self.perform_search)
+    search_shortcut.activated.connect(self._ask_notes_from_composer if hasattr(self, "_ask_notes_from_composer") else self.perform_search)
 
 
 
@@ -466,7 +620,6 @@ def setup_ui(self):
 
 
 
-    layout.addWidget(search_container)
 
 
 
@@ -491,6 +644,9 @@ def setup_ui(self):
 
 
     main_splitter = QSplitter(split_orientation)
+    self.main_splitter = main_splitter
+    self._sources_collapsed = False
+    self._sources_manually_expanded = False
 
 
 
@@ -498,19 +654,22 @@ def setup_ui(self):
 
 
 
-    # AI Answer section
+    # Chat transcript section
 
 
 
     answer_container = QWidget()
+    self.answer_container = answer_container
 
 
 
-    answer_container.setStyleSheet("background-color: rgba(46, 204, 113, 0.12); border-radius: 6px; padding: 8px;")
+    answer_container.setStyleSheet(_panel_style(theme))
 
 
 
     answer_layout = QVBoxLayout(answer_container)
+    answer_layout.setSpacing(7)
+    answer_layout.setContentsMargins(8, 7, 8, 8)
 
 
 
@@ -522,11 +681,14 @@ def setup_ui(self):
 
 
 
-    answer_label = QLabel("\U0001F4A1 AI Answer:")
+    answer_label = QLabel(f"{CHATBOT_ICON} Conversation")
 
 
 
-    answer_label.setStyleSheet("font-weight: bold; font-size: 14px; color: #27ae60;")
+    answer_label.setStyleSheet(
+        f"font-weight: bold; font-size: 13px; color: {theme['text']}; "
+        "background: transparent; border: none; padding: 0;"
+    )
 
 
 
@@ -535,30 +697,6 @@ def setup_ui(self):
 
 
     answer_header.addStretch()
-
-
-
-    self.copy_answer_btn = QPushButton("\U0001F4CB Copy")
-
-
-
-    self.copy_answer_btn.setMaximumWidth(80)
-
-
-
-    self.copy_answer_btn.setToolTip("Copy AI answer (paste into Word for bullets and formatting)")
-
-
-
-    self.copy_answer_btn.clicked.connect(self.copy_answer_to_clipboard)
-
-
-
-    self.copy_answer_btn.setEnabled(False)
-
-
-
-    answer_header.addWidget(self.copy_answer_btn)
 
 
 
@@ -590,10 +728,10 @@ def setup_ui(self):
     self.answer_box.setReadOnly(True)
 
     if hasattr(Qt, 'ScrollBarPolicy'):
-        self.answer_box.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.answer_box.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.answer_box.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     else:
-        self.answer_box.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.answer_box.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.answer_box.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
 
@@ -646,9 +784,12 @@ def setup_ui(self):
 
 
 
-        self.answer_box.setPlaceholderText("Enter a question above and click Search to see an AI answer based on your notes.")
+        self.answer_box.setPlaceholderText("Ask AI for direct reasoning, or Ask Notes for cited answers from your Anki notes.")
 
 
+
+    self.answer_box.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu if hasattr(Qt, "ContextMenuPolicy") else Qt.CustomContextMenu)
+    self.answer_box.customContextMenuRequested.connect(self._show_answer_context_menu)
 
     self.answer_box.setMinimumHeight(100)
 
@@ -661,6 +802,8 @@ def setup_ui(self):
     answer_font_size = self.styling_config.get('answer_font_size', 13)
     answer_bg = '#2d2d2d' if is_dark else '#ffffff'
     answer_text = '#ffffff' if is_dark else '#1a1a1a'
+    answer_selection_bg = "rgba(47, 129, 247, 0.24)" if is_dark else "rgba(47, 129, 247, 0.16)"
+    answer_selection_text = "#ffffff" if is_dark else "#111827"
     self.answer_box.setStyleSheet(
 
 
@@ -669,11 +812,13 @@ def setup_ui(self):
 
 
 
-        f"border: 2px solid #27ae60; color: {answer_text}; "
+        f"border: 1px solid {theme['subtle_border']}; color: {answer_text}; "
 
 
 
-        f"font-size: {answer_font_size}px; padding: 10px; }} "
+        f"font-size: {answer_font_size}px; padding: 9px; }} "
+
+        f"QTextBrowser#answerBox::selection, QTextEdit#answerBox::selection {{ background-color: {answer_selection_bg}; color: {answer_selection_text}; }} "
 
 
 
@@ -709,34 +854,9 @@ def setup_ui(self):
 
 
 
-    answer_layout.addWidget(self.answer_box)
+    answer_layout.addWidget(self.answer_box, 1)
 
-
-
-
-
-
-
-    # Hint: where the answer came from (API name or local model)
-
-
-
-    self.answer_source_label = QLabel("")
-
-
-
-    self.answer_source_label.setStyleSheet(
-        f"font-size: 11px; color: {'#c2d2ca' if is_dark else '#586a61'}; "
-        "font-style: italic; margin-top: 4px; padding: 2px 4px;"
-    )
-
-
-
-    self.answer_source_label.setWordWrap(True)
-
-
-
-    answer_layout.addWidget(self.answer_source_label)
+    answer_layout.addWidget(search_container, 0)
 
 
 
@@ -752,15 +872,22 @@ def setup_ui(self):
 
 
 
-    # Results section
+    if hasattr(self, "_render_chat_transcript"):
+        self._render_chat_transcript()
+
+    # Sources section
 
 
 
     results_container = QWidget()
+    self.results_container = results_container
+    results_container.setStyleSheet(_panel_style(theme))
 
 
 
     results_layout = QVBoxLayout(results_container)
+    results_layout.setContentsMargins(8, 7, 8, 8)
+    results_layout.setSpacing(7)
 
 
 
@@ -772,15 +899,18 @@ def setup_ui(self):
 
 
 
-    results_label = QLabel("\U0001F4CB Matching notes:")
+    results_label = QLabel("\U0001F4CB Sources:")
 
 
 
-    results_label.setToolTip("Notes that match your question. Check the ones to send to the AI for the answer.")
+    results_label.setToolTip("Notes found by Ask Notes or Find Related Notes. Citations in Ask Notes answers link back to these sources.")
 
 
 
-    results_label.setStyleSheet(f"font-weight: bold; font-size: {label_font_size}px; color: {'#ffffff' if is_dark else '#2c3e50'};")
+    results_label.setStyleSheet(
+        f"font-weight: bold; font-size: 13px; color: {theme['text']}; "
+        "background: transparent; border: none; padding: 0;"
+    )
 
 
 
@@ -796,7 +926,7 @@ def setup_ui(self):
 
 
 
-    self.selected_count_label.setToolTip("Notes you checked (for \"View Selected\"). Not the same as \"cited\" in the AI answer\u2014use \"Show only cited notes\" for that.")
+    self.selected_count_label.setToolTip(f"Notes you checked (for \"View Selected\"). Not the same as \"cited\" in the {CHATBOT_NAME} answer\u2014use \"Show only cited notes\" for that.")
 
 
 
@@ -805,36 +935,6 @@ def setup_ui(self):
 
 
     results_header.addStretch()
-
-
-
-    self.toggle_select_btn = QPushButton("Select All")
-
-
-
-    self.toggle_select_btn.setObjectName("toggleSelectBtn")
-
-
-
-    self.toggle_select_btn.setMinimumWidth(110)
-
-
-
-    self.toggle_select_btn.setToolTip("Toggle select/deselect all (Ctrl+A / Ctrl+D)")
-
-
-
-    self.toggle_select_btn.clicked.connect(self.toggle_select_all)
-
-
-
-    self.toggle_select_btn.setEnabled(False)
-
-
-
-    results_header.addWidget(self.toggle_select_btn)
-
-
 
     results_layout.addLayout(results_header)
 
@@ -872,11 +972,16 @@ def setup_ui(self):
 
 
 
-    self.results_list.setStyleSheet(f"font-size: {notes_font_size}px;")
+    self.results_list.setStyleSheet(
+        f"QTableWidget {{ font-size: {notes_font_size}px; border: 1px solid {theme['subtle_border']}; border-radius: 5px; }}"
+        f"QTableWidget:focus {{ border: 1px solid {theme['focus_border']}; }}"
+        "QTableWidget::item { padding: 5px 6px; }"
+    )
 
 
 
     self.results_list.setWordWrap(True)
+    self.results_list.verticalHeader().setDefaultSectionSize(max(32, notes_font_size + 18))
 
 
 
@@ -1070,7 +1175,55 @@ def setup_ui(self):
 
 
 
-    main_splitter.addWidget(results_container)
+    sources_shell = QWidget()
+    self.sources_shell = sources_shell
+    sources_shell_layout = QHBoxLayout(sources_shell)
+    sources_shell_layout.setContentsMargins(0, 0, 0, 0)
+    sources_shell_layout.setSpacing(4)
+
+    sources_handle_rail = QWidget()
+    self.sources_handle_rail = sources_handle_rail
+    sources_handle_rail.setFixedWidth(18)
+    sources_handle_layout = QVBoxLayout(sources_handle_rail)
+    sources_handle_layout.setContentsMargins(0, 0, 0, 0)
+    sources_handle_layout.setSpacing(0)
+
+    self.sources_toggle_btn = QPushButton("\u2039")
+    self.sources_toggle_btn.setObjectName("sourcesToggleBtn")
+    self.sources_toggle_btn.setFixedSize(18, 42)
+    self.sources_toggle_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+    self.sources_toggle_btn.setToolTip("Show Sources")
+    self.sources_toggle_btn.setStyleSheet(
+        "QPushButton#sourcesToggleBtn {"
+        "  padding: 0;"
+        "  margin: 0;"
+        "  border-radius: 4px;"
+        "  border: 1px solid rgba(149, 165, 166, 0.28);"
+        "  background-color: rgba(255, 255, 255, 0.015);"
+        "  color: rgba(236, 240, 241, 0.70);"
+        "  font-size: 18px;"
+        "  font-weight: bold;"
+        "}"
+        "QPushButton#sourcesToggleBtn:hover {"
+        "  border: 1px solid #3498db;"
+        "  background-color: rgba(52, 152, 219, 0.12);"
+        "  color: #d6ecff;"
+        "}"
+        "QPushButton#sourcesToggleBtn:focus {"
+        "  border: 1px solid #3498db;"
+        "  background-color: rgba(52, 152, 219, 0.16);"
+        "  color: #ffffff;"
+        "}"
+    )
+    self.sources_toggle_btn.clicked.connect(self._toggle_sources_panel)
+    self.sources_toggle_btn.setVisible(self.use_side_by_side)
+    sources_handle_layout.addStretch()
+    sources_handle_layout.addWidget(self.sources_toggle_btn)
+    sources_handle_layout.addStretch()
+    sources_shell_layout.addWidget(sources_handle_rail)
+    sources_shell_layout.addWidget(results_container, 1)
+
+    main_splitter.addWidget(sources_shell)
 
 
 
@@ -1098,7 +1251,7 @@ def setup_ui(self):
 
 
 
-    # Result tuning: relevance mode controls (Focused / Balanced / Broad); no slider
+    # Result tuning: single relevance threshold slider
 
 
 
@@ -1106,7 +1259,8 @@ def setup_ui(self):
 
 
 
-    sensitivity_container.setStyleSheet("background-color: rgba(241, 196, 15, 0.1); border-radius: 6px; padding: 6px;")
+    sensitivity_container.setObjectName("sourceFilterStrip")
+    sensitivity_container.setStyleSheet(_filter_strip_style(theme))
 
 
 
@@ -1114,19 +1268,36 @@ def setup_ui(self):
 
 
 
-    sensitivity_layout.setSpacing(4)
+    sensitivity_layout.setSpacing(5)
 
 
 
-    sensitivity_layout.setContentsMargins(4, 2, 4, 2)
+    sensitivity_layout.setContentsMargins(8, 6, 8, 6)
 
 
 
-    self.sensitivity_slider = None  # Slider removed; mode alone controls how many notes are shown
+    self.sensitivity_slider = QSlider(Qt.Orientation.Horizontal)
+    self.sensitivity_slider.setRange(20, 80)
+    self.sensitivity_slider.setSingleStep(1)
+    self.sensitivity_slider.setPageStep(5)
+    self.sensitivity_slider.setMinimumWidth(120)
+    self.sensitivity_slider.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    self.sensitivity_slider.setToolTip("Controls visible results and AI context eligibility. Use Show All Source Notes to inspect lower-relevance retained notes.")
+    try:
+        threshold_value = clamp_relevance_threshold_percent(
+            (load_config().get("search_config") or {}).get("relevance_threshold_percent", 65)
+        )
+    except Exception:
+        threshold_value = 65
+    self._effective_relevance_threshold_percent = threshold_value
+    self._relevance_threshold_source = "config"
+    self.sensitivity_slider.setValue(threshold_value)
 
 
 
-    self.sensitivity_value_label = None
+    self.sensitivity_value_label = QLabel(f"{threshold_value}%")
+    self.sensitivity_value_label.setMinimumWidth(42)
+    self.sensitivity_value_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
 
 
@@ -1134,7 +1305,8 @@ def setup_ui(self):
 
 
 
-    # Relevance modes + "Show only cited notes" aligned on one line
+    # Relevance threshold. The cited-notes filter is placed on a second row
+    # so narrow windows do not force the slider and checkbox to overlap.
 
 
 
@@ -1147,6 +1319,23 @@ def setup_ui(self):
 
 
     mode_and_filter_row.setContentsMargins(0, 0, 0, 0)
+
+    threshold_layout = QHBoxLayout()
+    threshold_layout.setSpacing(6)
+    threshold_layout.setContentsMargins(0, 0, 0, 0)
+    threshold_name = QLabel("Threshold")
+    threshold_name.setToolTip("Higher values show fewer, stricter matches and use the same cutoff for AI context.")
+    low_label = QLabel("More")
+    high_label = QLabel("Stricter")
+    for threshold_text_label in (threshold_name, low_label, high_label):
+        threshold_text_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        threshold_text_label.setStyleSheet(f"font-size: 11px; font-weight: 600; color: {theme['subtext']};")
+    threshold_layout.addWidget(threshold_name)
+    threshold_layout.addWidget(low_label)
+    threshold_layout.addWidget(self.sensitivity_slider, 20)
+    threshold_layout.addWidget(high_label)
+    threshold_layout.addWidget(self.sensitivity_value_label)
+    mode_and_filter_row.addLayout(threshold_layout, 20)
 
 
 
@@ -1231,23 +1420,23 @@ def setup_ui(self):
 
 
 
-    mode_border_color = "#f1c40f"
+    mode_border_color = theme["subtle_border"]
 
 
 
-    mode_text_color = "#f1c40f" if is_dark else "#7d6608"
+    mode_text_color = theme["subtext"]
 
 
 
-    mode_checked_bg = "#f1c40f" if is_dark else "#f9e79f"
+    mode_checked_bg = theme["section_header_checked"]
 
 
 
-    mode_checked_text = "#1e1e1e" if is_dark else "#7d6608"
+    mode_checked_text = theme["text"]
 
 
 
-    mode_hover_bg = "rgba(241, 196, 15, 0.18)"
+    mode_hover_bg = theme["panel_bg"]
 
 
 
@@ -1451,7 +1640,14 @@ def setup_ui(self):
 
 
 
-    mode_and_filter_row.addLayout(mode_layout)
+    for btn in self.relevance_mode_group.buttons():
+        btn.setVisible(False)
+
+    self.sensitivity_slider.valueChanged.connect(self.on_sensitivity_changed)
+    try:
+        self.sensitivity_slider.sliderReleased.connect(self.on_relevance_threshold_released)
+    except Exception:
+        pass
 
 
 
@@ -1460,6 +1656,8 @@ def setup_ui(self):
 
 
     self.show_only_cited_cb = QCheckBox("Show only cited notes")
+    self.show_only_cited_cb.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+    self.show_only_cited_cb.setStyleSheet(f"font-size: 11px; color: {theme['subtext']};")
 
 
 
@@ -1499,27 +1697,22 @@ def setup_ui(self):
 
 
 
-    mode_and_filter_row.addWidget(self.show_only_cited_cb)
-
-
-
-    mode_and_filter_row.addStretch()
-
-
-
-
-
-
-
     sensitivity_layout.addLayout(mode_and_filter_row)
 
+    cited_filter_row = QHBoxLayout()
+    cited_filter_row.setSpacing(4)
+    cited_filter_row.setContentsMargins(0, 0, 0, 0)
+    cited_filter_row.addStretch()
+    cited_filter_row.addWidget(self.show_only_cited_cb)
+    sensitivity_layout.addLayout(cited_filter_row)
 
 
 
 
 
 
-    layout.addWidget(sensitivity_container)
+
+    results_layout.addWidget(sensitivity_container)
 
 
 
@@ -1527,7 +1720,7 @@ def setup_ui(self):
 
 
 
-    # Action buttons
+    # Source action buttons
 
 
 
@@ -1539,47 +1732,13 @@ def setup_ui(self):
 
 
 
-    btn_bar_bg = "#2d2d2d" if is_dark else "#d5d8dc"
-
-
-
-    btn_bar_border = "#555555" if is_dark else "#95a5a6"
-
-
-
-    btn_container.setStyleSheet(f"""
-
-
-
-        QWidget#actionBar {{
-
-
-
-            background-color: {btn_bar_bg};
-
-
-
-            border: 1px solid {btn_bar_border};
-
-
-
-            border-radius: 6px;
-
-
-
-            padding: 6px;
-
-
-
-        }}
-
-
-
-    """)
+    btn_container.setStyleSheet("QWidget#actionBar { background-color: transparent; padding: 0; }")
 
 
 
     btn_layout = QHBoxLayout(btn_container)
+    btn_layout.setContentsMargins(0, 0, 0, 0)
+    btn_layout.setSpacing(7)
 
 
 
@@ -1649,6 +1808,16 @@ def setup_ui(self):
 
     self.view_all_btn.setEnabled(False)
 
+    self.show_all_dynamic_results_btn = QPushButton("\U0001F4DA Show All Source Notes")
+    self.show_all_dynamic_results_btn.setObjectName("showAllDynamicResultsBtn")
+    self.show_all_dynamic_results_btn.setToolTip(
+        "Show lower-relevance source notes hidden by the threshold or display limit. "
+        "AI answer context stays unchanged."
+    )
+    self.show_all_dynamic_results_btn.setMinimumHeight(30)
+    self.show_all_dynamic_results_btn.clicked.connect(self._on_show_all_dynamic_results)
+    self.show_all_dynamic_results_btn.setVisible(False)
+
 
 
 
@@ -1663,6 +1832,10 @@ def setup_ui(self):
 
 
 
+    btn_layout.addWidget(self.show_all_dynamic_results_btn)
+
+
+
     btn_layout.addStretch()
 
 
@@ -1671,7 +1844,7 @@ def setup_ui(self):
 
 
 
-    layout.addWidget(btn_container)
+    results_layout.addWidget(btn_container)
 
 
 
@@ -1687,7 +1860,11 @@ def setup_ui(self):
 
 
 
-    status_container.setStyleSheet("background-color: rgba(52, 152, 219, 0.15); border-radius: 4px; padding: 4px;")
+    status_container.setStyleSheet(
+        f"background-color: {theme['panel_bg']}; "
+        f"border: 1px solid {theme['subtle_border']}; "
+        "border-radius: 5px;"
+    )
 
 
 
@@ -1703,7 +1880,8 @@ def setup_ui(self):
 
 
 
-    status_icon = QLabel("\u2139\ufe0f")
+    status_icon = QLabel("\u2139")
+    status_icon.setStyleSheet(f"color: {theme['quiet_text']}; font-size: 11px;")
 
 
 
@@ -1711,7 +1889,7 @@ def setup_ui(self):
 
 
 
-    self.status_label.setStyleSheet(f"color: {'#ffffff' if is_dark else '#2c3e50'}; font-size: 12px; font-weight: 600;")
+    self.status_label.setStyleSheet(f"color: {theme['subtext']}; font-size: 11px; font-weight: 500;")
 
 
 
@@ -1719,11 +1897,8 @@ def setup_ui(self):
 
 
 
-        "Showing X of Y: X = notes passing the Sensitivity filter, Y = notes in this result set (from Min relevance % and Max results in Settings). "
-
-
-
-        "Move the Sensitivity slider to change X. Raise Min relevance % in Settings to get a smaller result set (smaller Y)."
+        "Showing X of Y: X = notes passing the Relevance Threshold, Y = notes in this result set. "
+        "Move the threshold slider to show more results or stricter matches."
 
 
 
@@ -1892,4 +2067,26 @@ def setup_ui(self):
 
 
 
+    if self.use_side_by_side:
+        QTimer.singleShot(0, self._collapse_sources_panel)
+
     QTimer.singleShot(100, self._refresh_scope_banner)
+
+
+class SearchDialogUiMixin:
+    """Owns search dialog defaults and widget construction."""
+
+    def reset_to_medical_defaults(self):
+        return reset_to_medical_defaults(self)
+
+    def _collapse_sources_panel(self, manual=False):
+        return _collapse_sources_panel(self, manual=manual)
+
+    def _expand_sources_panel(self, manual=False):
+        return _expand_sources_panel(self, manual=manual)
+
+    def _toggle_sources_panel(self):
+        return _toggle_sources_panel(self)
+
+    def setup_ui(self):
+        return setup_ui(self)

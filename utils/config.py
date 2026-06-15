@@ -1,4 +1,4 @@
-"""Config load/save and helpers."""
+﻿"""Config load/save and helpers."""
 
 # ============================================================================
 # Imports
@@ -14,18 +14,26 @@ from .log import log_debug
 
 # Voyage embedding models: voyage-3-lite is faster with fewer dimensions; voyage-3.5-lite is higher quality
 VOYAGE_EMBEDDING_MODELS = ["voyage-3-lite", "voyage-3.5-lite"]
-DEFAULT_RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L6-v2"
-RERANK_TOP_K_DEFAULT = 25
+DEFAULT_RERANK_MODEL = "NeuML/biomedbert-base-reranker"
+RERANK_TOP_K_DEFAULT = 50
 RERANK_TOP_K_MIN = 5
 RERANK_TOP_K_MAX = 100
 RERANK_TIMEOUT_SECONDS_DEFAULT = 90
 RERANK_TIMEOUT_SECONDS_MIN = 15
 RERANK_TIMEOUT_SECONDS_MAX = 300
-RESEARCH_MODE_DEFAULT = "compact"
-RESEARCH_MODE_CHOICES = ("compact", "full")
-MAX_RESEARCH_FILES_DEFAULT = 50
-MAX_RESEARCH_FILES_MIN = 1
-MAX_RESEARCH_FILES_MAX = 1000
+RELEVANCE_THRESHOLD_PERCENT_DEFAULT = 65
+RELEVANCE_THRESHOLD_PERCENT_MIN = 20
+RELEVANCE_THRESHOLD_PERCENT_MAX = 80
+RETRIEVAL_RELEVANCE_FLOOR_PERCENT = 20
+# Legacy names kept for older imports/tests while the UI moves to relevance_threshold_percent.
+MIN_RELEVANCE_PERCENT_DEFAULT = RELEVANCE_THRESHOLD_PERCENT_DEFAULT
+MIN_RELEVANCE_PERCENT_MIN = RELEVANCE_THRESHOLD_PERCENT_MIN
+MIN_RELEVANCE_PERCENT_MAX = RELEVANCE_THRESHOLD_PERCENT_MAX
+ANALYTICS_MODE_DEFAULT = "compact"
+ANALYTICS_MODE_CHOICES = ("compact", "full")
+MAX_ANALYTICS_FILES_DEFAULT = 50
+MAX_ANALYTICS_FILES_MIN = 1
+MAX_ANALYTICS_FILES_MAX = 1000
 
 # Safe defaults for shipped config (no secrets, no machine-specific paths)
 DEFAULT_CONFIG = {
@@ -49,27 +57,51 @@ DEFAULT_CONFIG = {
         "use_first_field_fallback": True,
         "enabled_decks": [],
     },
+    "review_ask_ai": {
+        "context_source": "embedding_fields",
+        "note_type_fields": {},
+        "search_all_fields": False,
+        "use_first_field_fallback": True,
+    },
     "search_config": {
         "search_method": "hybrid",
-        # Overall relevance mode for search results:
-        # - "focused": very on-topic, fewer notes (strict)
-        # - "balanced": default mix of precision and coverage
-        # - "broad": wider net, more tolerant of weaker matches
-        "relevance_mode": "balanced",
         "enable_query_expansion": False,
+        "enable_agentic_rag": False,
+        "enable_profile_memory": True,
+        "memory_retrieval_mode": "auto_hybrid",
+        "memory_retention_days": 30,
+        "memory_max_saved_snippets_per_search": 24,
+        "memory_max_retrieved_snippets": 5,
+        "memory_embedding_enabled": True,
+        "agentic_max_retrieval_passes": 3,
+        "agentic_max_subqueries": 6,
+        "planner_confidence_threshold": 0.6,
+        "agentic_planner_mode": "deterministic_v1",
+        "agentic_planner_model": "",
+        "agentic_planner_timeout_seconds": 25,
+        "agentic_planner_max_tokens": 350,
         "enable_hyde": True,
         "enable_rerank": True,
         "use_context_boost": True,
-        "min_relevance_percent": 55,
+        "relevance_threshold_percent": RELEVANCE_THRESHOLD_PERCENT_DEFAULT,
         "max_results": 50,
         "context_chars_per_note": 0,
         # Assumed local answer model context window. The add-on uses this to
         # dynamically choose light/balanced/deep note context budgets.
         "local_llm_context_tokens": 12288,
+        "enable_context_score_cliff": True,
+        "context_score_cliff_threshold": 15.0,
+        "context_score_cliff_min_notes": 8,
+        "enable_context_anchor_rescue": True,
+        "context_score_cliff_anchor_rescue_slots": 3,
+        "context_score_cliff_anchor_rescue_similarity_floor": None,
+        "enable_rescue_specificity_scoring": True,
+        "rescue_specificity_threshold": 0.85,
+        "rescue_specificity_max_doc_freq": 4,
+        "rescue_specificity_max_weight": 0.5,
         # Dedicated local answer model. Kept separate from local embedding
         # model so independent embedding settings cannot overwrite answers.
         "answer_local_model": "",
-        "relevance_from_answer": True,
         "hybrid_embedding_weight": 40,
         "embedding_engine": "ollama",
         "voyage_api_key": "",
@@ -89,35 +121,35 @@ DEFAULT_CONFIG = {
         "rerank_model": DEFAULT_RERANK_MODEL,
         "rerank_top_k": RERANK_TOP_K_DEFAULT,
         "rerank_timeout_seconds": RERANK_TIMEOUT_SECONDS_DEFAULT,
-        "research_enabled": False,
-        "research_mode": RESEARCH_MODE_DEFAULT,
-        "max_research_files": MAX_RESEARCH_FILES_DEFAULT,
+        "analytics_enabled": False,
+        "analytics_mode": ANALYTICS_MODE_DEFAULT,
+        "max_analytics_files": MAX_ANALYTICS_FILES_DEFAULT,
         "rerank_python_path": "",
         "sentence_transformers_path": None,
-        "sensitivity_percent": 87,
         "show_only_cited": False,
         # Optional extra stop words for domain-specific generic terms in queries
         # e.g. ["pediatrics", "medicine", "clinical"]
         "extra_stop_words": [],
         # Optional verbose debug logging for search internals (query analysis, scores)
         "verbose_search_debug": False,
-        # Retrieval V2 is opt-in. "legacy" preserves the historical ranking path.
-        "retrieval_version": "legacy",
+        # Retrieval V2 is the permanent retrieval engine.
+        "retrieval_version": "v2",
         "keyword_scoring_method": "bm25",
         "enable_mmr_diversity": True,
         "mmr_lambda": 0.75,
-        "mmr_candidate_pool": 50,
         "mmr_similarity_method": "token_jaccard",
         # Optional extra synonym groups for query expansion (no UI). Each group is a list of
         # equivalent terms; if any term in the group appears in the query, the rest are appended.
         # Example: [["warfarin", "coumadin"], ["vitamin k", "phytonadione"]]
         "synonym_overrides": [],
-        # Optional: one short LLM call per search to detect generic query terms to exclude
+        # Hidden/advanced legacy option: one short LLM call per search to detect generic query terms.
+        # Deterministic stop-word and intent-aware filtering is always on without this.
         "use_ai_generic_term_detection": False,
         "embedding_same_as_answer": True,
         "embedding_strategy": "cloud",
         "embedding_cloud_provider": "Voyage AI",
         "embedding_cloud_api_key": "",
+        "embedding_local_backend": "ollama",
         "embedding_local_url": "",
         "embedding_local_model": "nomic-embed-text",
     },
@@ -158,6 +190,10 @@ def save_config(config):
     try:
         config_path = get_config_file_path()
         log_debug(f"Saving config to: {config_path}")
+        if isinstance(config, dict):
+            search_config = config.get("search_config")
+            if isinstance(search_config, dict):
+                normalize_search_threshold_config(search_config, log_warnings=False)
         temp_path = config_path + ".tmp"
         try:
             with open(temp_path, "w", encoding="utf-8") as f:
@@ -188,7 +224,8 @@ def load_config():
             log_debug(f"Config file does not exist: {config_path}, using defaults")
             merged = _deep_merge(DEFAULT_CONFIG, {})
             search_config = dict(merged.get("search_config") or {})
-            normalize_research_config(search_config, {}, log_warnings=False)
+            normalize_search_threshold_config(search_config, log_warnings=False)
+            normalize_analytics_config(search_config, {}, log_warnings=False)
             merged["search_config"] = search_config
             return merged
         with open(config_path, "r", encoding="utf-8-sig") as f:
@@ -199,13 +236,11 @@ def load_config():
         merged = _deep_merge(DEFAULT_CONFIG, file_config)
         file_search_config = file_config.get("search_config") or {}
         search_config = dict(merged.get("search_config") or {})
-        mode = (search_config.get("relevance_mode") or "").strip().lower()
-        if "relevance_mode" not in file_search_config:
-            search_config["relevance_mode"] = "balanced"
         _protect_answer_model_from_embedding_migration(search_config)
+        normalize_search_threshold_config(search_config, log_warnings=True)
         normalize_rerank_config(search_config, log_warnings=True)
         normalize_retrieval_config(search_config, log_warnings=True)
-        normalize_research_config(search_config, file_search_config, log_warnings=True)
+        normalize_analytics_config(search_config, file_search_config, log_warnings=True)
         merged["search_config"] = search_config
         log_debug(f"Config loaded from file (merged with defaults)")
         return merged
@@ -213,16 +248,21 @@ def load_config():
         log_debug(f"Error loading config file: {e}")
         merged = _deep_merge(DEFAULT_CONFIG, {})
         search_config = dict(merged.get("search_config") or {})
-        normalize_research_config(search_config, {}, log_warnings=False)
+        normalize_search_threshold_config(search_config, log_warnings=False)
+        normalize_analytics_config(search_config, {}, log_warnings=False)
         merged["search_config"] = search_config
         return merged
 
 
-def _research_log_dir_exists():
+def _analytics_log_dir_exists():
     try:
         from .paths import get_checkpoint_path
 
-        return os.path.isdir(os.path.join(os.path.dirname(get_checkpoint_path()), "search_research"))
+        base = os.path.dirname(get_checkpoint_path())
+        return (
+            os.path.isdir(os.path.join(base, "search_analytics"))
+            or os.path.isdir(os.path.join(base, "search_research"))
+        )
     except Exception:
         return False
 
@@ -270,6 +310,47 @@ def get_config_value(config, key, default):
     if not config:
         return default
     return config.get(key, default)
+
+
+def clamp_relevance_threshold_percent(value, default=RELEVANCE_THRESHOLD_PERCENT_DEFAULT):
+    try:
+        value = int(value)
+    except Exception:
+        value = default
+    return max(RELEVANCE_THRESHOLD_PERCENT_MIN, min(RELEVANCE_THRESHOLD_PERCENT_MAX, value))
+
+
+def clamp_min_relevance_percent(value, default=MIN_RELEVANCE_PERCENT_DEFAULT):
+    """Backward-compatible alias for the old user-facing setting."""
+    return clamp_relevance_threshold_percent(value, default)
+
+
+def normalize_search_threshold_config(search_config, log_warnings=False):
+    """Normalize the single user-facing relevance threshold in-place."""
+    sc = search_config if isinstance(search_config, dict) else {}
+    source_key = "relevance_threshold_percent"
+    if source_key in sc:
+        original = sc.get(source_key, RELEVANCE_THRESHOLD_PERCENT_DEFAULT)
+    else:
+        original = sc.get("min_relevance_percent", RELEVANCE_THRESHOLD_PERCENT_DEFAULT)
+    clamped = clamp_relevance_threshold_percent(original)
+    sc[source_key] = clamped
+    sc.pop("min_relevance_percent", None)
+    sc.pop("sensitivity_percent", None)
+    sc.pop("relevance_mode", None)
+    if log_warnings:
+        try:
+            original_int = int(original)
+        except Exception:
+            original_int = RELEVANCE_THRESHOLD_PERCENT_DEFAULT
+        if original_int != clamped:
+            log_debug(
+                "Search threshold config warning: "
+                f"{source_key}={original!r} outside "
+                f"{RELEVANCE_THRESHOLD_PERCENT_MIN}..{RELEVANCE_THRESHOLD_PERCENT_MAX}; "
+                f"clamped to {clamped!r}"
+            )
+    return sc
 
 
 # ============================================================================
@@ -333,53 +414,70 @@ def get_rerank_config(config_or_search_config):
 
 
 # ============================================================================
-# Search Research Logging Configuration
+# Search Analytics Logging Configuration
 # ============================================================================
 
-def normalize_research_config(search_config, file_search_config=None, log_warnings=False):
-    """Normalize local search research logging settings in-place and return them."""
+def normalize_analytics_config(search_config, file_search_config=None, log_warnings=False):
+    """Normalize local search analytics logging settings in-place and return them."""
     sc = search_config if isinstance(search_config, dict) else {}
     file_sc = file_search_config if isinstance(file_search_config, dict) else sc
     warnings = []
 
-    if "research_enabled" not in file_sc:
-        sc["research_enabled"] = _research_log_dir_exists()
+    if "analytics_enabled" not in sc and "research_enabled" in sc:
+        sc["analytics_enabled"] = sc.get("research_enabled")
+    if "analytics_mode" not in sc and "research_mode" in sc:
+        sc["analytics_mode"] = sc.get("research_mode")
+    if "max_analytics_files" not in sc and "max_research_files" in sc:
+        sc["max_analytics_files"] = sc.get("max_research_files")
+
+    if "analytics_enabled" not in file_sc and "research_enabled" not in file_sc:
+        sc["analytics_enabled"] = _analytics_log_dir_exists()
     else:
-        sc["research_enabled"] = _coerce_bool(
-            sc.get("research_enabled", False),
+        sc["analytics_enabled"] = _coerce_bool(
+            sc.get("analytics_enabled", False),
             False,
-            "research_enabled",
+            "analytics_enabled",
             warnings,
         )
 
-    mode = (sc.get("research_mode") or RESEARCH_MODE_DEFAULT).strip().lower()
-    if mode not in RESEARCH_MODE_CHOICES:
-        warnings.append(f"research_mode={mode!r} is invalid; using {RESEARCH_MODE_DEFAULT!r}")
-        mode = RESEARCH_MODE_DEFAULT
-    sc["research_mode"] = mode
+    mode = (sc.get("analytics_mode") or ANALYTICS_MODE_DEFAULT).strip().lower()
+    if mode not in ANALYTICS_MODE_CHOICES:
+        warnings.append(f"analytics_mode={mode!r} is invalid; using {ANALYTICS_MODE_DEFAULT!r}")
+        mode = ANALYTICS_MODE_DEFAULT
+    sc["analytics_mode"] = mode
 
-    sc["max_research_files"] = _coerce_int(
-        sc.get("max_research_files", MAX_RESEARCH_FILES_DEFAULT),
-        MAX_RESEARCH_FILES_DEFAULT,
-        MAX_RESEARCH_FILES_MIN,
-        MAX_RESEARCH_FILES_MAX,
-        "max_research_files",
+    sc["max_analytics_files"] = _coerce_int(
+        sc.get("max_analytics_files", MAX_ANALYTICS_FILES_DEFAULT),
+        MAX_ANALYTICS_FILES_DEFAULT,
+        MAX_ANALYTICS_FILES_MIN,
+        MAX_ANALYTICS_FILES_MAX,
+        "max_analytics_files",
         warnings,
     )
 
     if log_warnings:
         for warning in warnings:
-            log_debug(f"Research config warning: {warning}")
+            log_debug(f"Analytics config warning: {warning}")
     return sc
 
 
-def get_research_config(config_or_search_config):
-    """Return normalized search research logging config from full config or search_config."""
+def get_analytics_config(config_or_search_config):
+    """Return normalized search analytics logging config from full config or search_config."""
     source = config_or_search_config or {}
     if isinstance(source, dict) and "search_config" in source:
         source = source.get("search_config") or {}
     sc = dict(source or {})
-    return normalize_research_config(sc, sc, log_warnings=False)
+    return normalize_analytics_config(sc, sc, log_warnings=False)
+
+
+def normalize_research_config(search_config, file_search_config=None, log_warnings=False):
+    """Backward-compatible alias for older callers."""
+    return normalize_analytics_config(search_config, file_search_config, log_warnings)
+
+
+def get_research_config(config_or_search_config):
+    """Backward-compatible alias for older callers."""
+    return get_analytics_config(config_or_search_config)
 
 
 # ============================================================================
@@ -424,11 +522,7 @@ def _coerce_int(value, default, min_value, max_value, key, warnings):
 
 
 def normalize_retrieval_config(search_config, log_warnings=False):
-    """Validate retrieval knobs and return a normalized copy.
-
-    Invalid values intentionally fall back to legacy-safe behavior so a typo in
-    config.json cannot break searching during study.
-    """
+    """Validate retrieval knobs and return a normalized copy."""
     sc = dict(search_config or {})
     warnings = []
 
@@ -436,27 +530,20 @@ def normalize_retrieval_config(search_config, log_warnings=False):
         if typo in sc:
             warnings.append(f"Ignoring unknown retrieval config key {typo!r}; did you mean 'retrieval_version'?")
 
-    version = (sc.get("retrieval_version") or "legacy").strip().lower()
-    if version not in ("legacy", "v2"):
-        warnings.append(f"retrieval_version={version!r} is invalid; using 'legacy'")
-        version = "legacy"
-    sc["retrieval_version"] = version
+    # Retrieval V2 is now mandatory.
+    sc["retrieval_version"] = "v2"
 
-    scorer = (sc.get("keyword_scoring_method") or ("bm25" if version == "v2" else "tfidf")).strip().lower()
-    if scorer not in ("bm25", "tfidf"):
-        warnings.append(f"keyword_scoring_method={scorer!r} is invalid; using {'bm25' if version == 'v2' else 'tfidf'!r}")
-        scorer = "bm25" if version == "v2" else "tfidf"
-    if version != "v2":
-        scorer = "tfidf"
+    scorer = (sc.get("keyword_scoring_method") or "bm25").strip().lower()
+    if scorer != "bm25":
+        # TF-IDF is removed; force BM25
+        scorer = "bm25"
     sc["keyword_scoring_method"] = scorer
 
     sc["enable_mmr_diversity"] = _coerce_bool(
         sc.get("enable_mmr_diversity", True), True, "enable_mmr_diversity", warnings
     )
     sc["mmr_lambda"] = _coerce_float(sc.get("mmr_lambda", 0.75), 0.75, 0.0, 1.0, "mmr_lambda", warnings)
-    sc["mmr_candidate_pool"] = _coerce_int(
-        sc.get("mmr_candidate_pool", 50), 50, 5, 200, "mmr_candidate_pool", warnings
-    )
+    sc.pop("mmr_candidate_pool", None)
     method = (sc.get("mmr_similarity_method") or "token_jaccard").strip().lower()
     if method != "token_jaccard":
         warnings.append(f"mmr_similarity_method={method!r} is invalid; using 'token_jaccard'")
@@ -478,7 +565,7 @@ def get_retrieval_config(config_or_search_config):
 
 
 def is_retrieval_v2(config_or_search_config):
-    return get_retrieval_config(config_or_search_config).get("retrieval_version") == "v2"
+    return True
 
 
 # ============================================================================
@@ -557,18 +644,36 @@ def get_effective_embedding_config(config: dict) -> dict:
         effective_sc = dict(sc)
 
         if strategy == "local":
-            effective_sc["embedding_engine"] = "local_openai"
-            effective_sc["local_llm_url"] = (
-                sc.get("embedding_local_url")
-                or sc.get("local_llm_url")
-                or "http://localhost:11434/v1"
-            )
-            effective_sc["local_llm_model"] = (
-                sc.get("embedding_local_model")
-                or sc.get("local_llm_model")
-                or sc.get("ollama_embed_model")
-                or "text-embedding-3-small"
-            )
+            local_backend = (sc.get("embedding_local_backend") or "").strip().lower()
+            if not local_backend:
+                url = (sc.get("embedding_local_url") or sc.get("local_llm_url") or "").lower()
+                local_backend = "ollama" if ":11434" in url or (sc.get("embedding_engine") == "ollama") else "custom_openai"
+
+            if local_backend == "ollama":
+                effective_sc["embedding_engine"] = "ollama"
+                effective_sc["ollama_base_url"] = (
+                    sc.get("embedding_local_url")
+                    or sc.get("ollama_base_url")
+                    or "http://localhost:11434"
+                )
+                effective_sc["ollama_embed_model"] = (
+                    sc.get("embedding_local_model")
+                    or sc.get("ollama_embed_model")
+                    or "nomic-embed-text"
+                )
+            else:
+                effective_sc["embedding_engine"] = "local_openai"
+                effective_sc["local_llm_url"] = (
+                    sc.get("embedding_local_url")
+                    or sc.get("local_llm_url")
+                    or "http://localhost:1234/v1"
+                )
+                effective_sc["local_llm_model"] = (
+                    sc.get("embedding_local_model")
+                    or sc.get("local_llm_model")
+                    or sc.get("ollama_embed_model")
+                    or "text-embedding-3-small"
+                )
         else:
             provider_id = _normalize_embedding_cloud_provider(
                 sc.get("embedding_cloud_provider")

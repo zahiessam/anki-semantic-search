@@ -114,11 +114,11 @@ AI-assisted retrieval:
 
 Clinical accuracy tuning:
 
-- Minimum relevance threshold.
+- Minimum relevance threshold as a global retrieval quality floor.
 - Max results pool.
 - Hybrid embedding weight.
 - Relevance from answer.
-- Relevance mode: Focused, Balanced, or Broad.
+- Relevance Threshold slider: one visible cutoff for shown notes and AI context, while retrieval keeps a low internal floor for reranking breadth.
 
 Re-ranking:
 
@@ -183,6 +183,16 @@ Semantic search needs embeddings. Click Create/Update Embeddings after:
 The add-on stores embedding data under `user_files/` and uses status checks to detect stale or incomplete indexing.
 
 If a note is excluded from indexing, use Review Ineligible Notes to inspect why.
+
+## Local Memory
+
+When Local Memory is enabled, the add-on stores compact snippets from the final notes selected for an answer. These snippets stay in `user_files/agent_memory.db` and are used only to help future retrieval planning.
+
+- Memory snippets are not added to the answer prompt as numbered notes.
+- Memory snippets are marked non-citable; final citations still refer only to visible Anki notes.
+- Text memory works without embeddings.
+- Hybrid memory can use the configured embedding provider for local memory retrieval; if embedding is slow or unavailable, it falls back to text retrieval.
+- Use Settings -> Memory Summary or Inspect Memory to review stored snippets, prune, rebuild memory embeddings, or clear memory.
 
 ## Local AI Setup
 
@@ -262,6 +272,7 @@ What may be sent externally depends on your provider choices.
 - Local-only setup: if both answers and embeddings use a local server, note content stays on your machine.
 - Cloud embeddings: selected searchable note fields are sent to the embedding provider when building/searching embeddings.
 - Cloud answers: your query and selected matching note context are sent to the answer provider.
+- Local Memory: compact snippets from final answer context are stored locally for future retrieval planning. If hybrid memory is enabled with a cloud embedding provider, those snippets may be sent to that embedding provider to create memory vectors.
 
 API keys are stored in `config.json` in the add-on folder. Do not share this file.
 
@@ -282,7 +293,7 @@ Logs and user data are stored under `user_files/` where possible. Logs redact se
 - Use Note Types & Fields to limit searchable fields.
 - Enable Query Expansion for medical synonyms.
 - Enable Cross-Encoder re-ranking if installed.
-- Try Focused relevance mode.
+- Raise the Relevance Threshold for a stricter visible result set, or lower it to show more matches.
 - Review extra stop words.
 
 ### Embeddings fail

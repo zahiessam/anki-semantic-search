@@ -3,6 +3,7 @@ from aqt.qt import QEvent, QObject
 from aqt.utils import tooltip
 
 from ..utils import log_debug
+from .branding import CHATBOT_NAME
 from .widgets import SemanticSearchSideBar
 
 _sidebar_instance = None
@@ -28,6 +29,38 @@ def _open_search_dialog():
     _sidebar_hidden_for_dialog = True
     toggle_sidebar_visibility(False)
     _with_dialogs("search", lambda dialogs_module: dialogs_module.show_search_dialog())
+
+
+def _review_context_payload():
+    try:
+        reviewer = getattr(mw, "reviewer", None)
+        card = getattr(reviewer, "card", None)
+        if card is None:
+            return None
+
+        note = card.note()
+        from .review_ask_ai import extract_review_note_context
+
+        return {
+            "review_card": card,
+            "review_note_id": getattr(note, "id", None),
+            "review_context": extract_review_note_context(note),
+        }
+    except Exception as exc:
+        log_debug(f"Semantic Search Addon: failed to prepare review context: {exc}", is_error=True)
+        return None
+
+
+def _open_ask_ai_dialog():
+    global _sidebar_hidden_for_dialog
+    _sidebar_hidden_for_dialog = True
+    toggle_sidebar_visibility(False)
+
+    def open_dialog(dialogs_module):
+        payload = _review_context_payload() or {}
+        dialogs_module.show_search_dialog(**payload)
+
+    _with_dialogs(CHATBOT_NAME, open_dialog)
 
 
 def _open_embed_dialog():
@@ -58,6 +91,7 @@ def show_sidebar():
         _sidebar_instance = SemanticSearchSideBar(
             mw,
             callbacks={
+                "ask_ai": _open_ask_ai_dialog,
                 "search": _open_search_dialog,
                 "embed": _open_embed_dialog,
                 "settings": _open_settings_dialog,

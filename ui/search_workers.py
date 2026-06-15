@@ -11,7 +11,12 @@ import urllib.request
 from aqt.qt import QThread, pyqtSignal
 
 from ..core.compat import _ensure_stderr_patched, _patch_colorama_early
-from ..core.engine import get_embedding_for_query, get_embeddings_batch, load_embedding
+from ..core.engine import (
+    get_embedding_for_query,
+    get_embeddings_batch,
+    load_embedding,
+    load_embeddings_bulk,
+)
 from ..core.errors import _is_embedding_dimension_mismatch
 from ..utils.config import (
     DEFAULT_RERANK_MODEL,
@@ -21,11 +26,43 @@ from ..utils.config import (
 )
 from ..utils.log import log_debug
 from ..utils.text import semantic_chunk_text
+from .image_attachments import IMAGE_SUPPORT_ERROR, is_image_support_error
+
+
+BULK_SEARCH_SOFT_MEMORY_BYTES = 256 * 1024 * 1024
+BULK_SEARCH_LIMIT = 80
+_LAST_EMBEDDING_MATCH_DIAGNOSTICS = {
+    "rows": 0,
+    "exact_matches": 0,
+    "note_id_fallback_matches": 0,
+}
 
 
 # ============================================================================
 # Search Worker Compatibility And Standalone Search Helpers
 # ============================================================================
+
+
+class AgenticPlanWorker(QThread):
+    """Build the Agentic RAG plan away from the UI thread."""
+
+    finished_signal = pyqtSignal(object)
+    error_signal = pyqtSignal(str)
+
+    def __init__(self, build_plan_callable, query, history, config):
+        super().__init__()
+        self._build_plan_callable = build_plan_callable
+        self._query = query
+        self._history = history
+        self._config = config
+
+    def run(self):
+        try:
+            plan = self._build_plan_callable(self._query, self._history, self._config)
+            self.finished_signal.emit(plan)
+        except Exception as exc:
+            log_debug(f"AgenticPlanWorker error: {exc}")
+            self.error_signal.emit(str(exc))
 
 def _embedding_search_backend_sqlite_scan(embedding_query, notes, config, db_path=None):
     """Embedding-search boundary for future FAISS/sqlite-vec backends.
@@ -37,6 +74,235 @@ def _embedding_search_backend_sqlite_scan(embedding_query, notes, config, db_pat
     return _run_embedding_search_sync(embedding_query, notes, config, db_path=db_path)
 
 
+def get_last_embedding_match_diagnostics():
+    return dict(_LAST_EMBEDDING_MATCH_DIAGNOSTICS)
+
+
+def _set_embedding_match_diagnostics(rows=0, exact_matches=0, note_id_fallback_matches=0):
+    _LAST_EMBEDDING_MATCH_DIAGNOSTICS.update(
+        {
+            "rows": int(rows or 0),
+            "exact_matches": int(exact_matches or 0),
+            "note_id_fallback_matches": int(note_id_fallback_matches or 0),
+        }
+    )
+
+
+def _note_content_hash(note):
+    import hashlib
+
+    content_hash = note.get("content_hash")
+    if content_hash is None:
+        content_hash = hashlib.md5(note.get("content", "").encode()).hexdigest()
+    return content_hash
+
+
+def _run_embedding_search_bulk_numpy(
+    embedding_list,
+    notes,
+    db_path=None,
+    progress_callback=None,
+    should_cancel=None,
+    result_limit=BULK_SEARCH_LIMIT,
+    memory_cap_bytes=BULK_SEARCH_SOFT_MEMORY_BYTES,
+):
+    """Score embeddings with batched NumPy matrix multiplication."""
+    try:
+        import numpy as np
+    except ImportError:
+        return None
+
+    query_vector = np.asarray(embedding_list, dtype=np.float32)
+    query_dim = int(query_vector.shape[0]) if query_vector.ndim == 1 else 0
+    query_norm = float(np.linalg.norm(query_vector)) if query_dim else 0.0
+    if not query_dim or query_norm <= 0:
+        return None
+    query_vector = query_vector / query_norm
+
+    note_lookup = {}
+    note_lookup_by_id = {}
+    note_order = {}
+    for idx, note in enumerate(notes or []):
+        key = (note.get("id"), _note_content_hash(note))
+        note_lookup[key] = note
+        note_lookup_by_id.setdefault(note.get("id"), note)
+        note_order[key] = idx
+
+    rows = load_embeddings_bulk(db_path=db_path)
+    if not rows:
+        _set_embedding_match_diagnostics(0, 0, 0)
+        return None
+    exact_available_note_ids = {
+        row.get("note_id")
+        for row in rows
+        if (row.get("note_id"), row.get("content_hash")) in note_lookup
+    }
+
+    bytes_per_vector = max(1, query_dim * 4)
+    batch_size = max(1, int(memory_cap_bytes // bytes_per_vector))
+    scored_notes = []
+    vectors = []
+    vector_notes = []
+    checked = 0
+    total = len(rows)
+    exact_matches = 0
+    fallback_matches = 0
+
+    def flush_batch():
+        nonlocal vectors, vector_notes, scored_notes
+        if not vectors:
+            return
+        matrix = np.vstack(vectors).astype(np.float32, copy=False)
+        norms = np.linalg.norm(matrix, axis=1)
+        valid = norms > 0
+        if valid.any():
+            matrix = matrix[valid] / norms[valid, None]
+            notes_valid = [note for note, keep in zip(vector_notes, valid.tolist()) if keep]
+            similarities = matrix @ query_vector
+            scored_notes.extend(((float(sim) + 1.0) * 50.0, note) for sim, note in zip(similarities, notes_valid))
+        vectors = []
+        vector_notes = []
+
+    for row in rows:
+        if should_cancel and should_cancel():
+            return None
+        checked += 1
+        if progress_callback and (checked == 1 or checked == total or checked % max(50, total // 40 or 1) == 0):
+            pct = int(100 * checked / total) if total else 0
+            progress_callback(checked, total, f"Embedding search: {checked}/{total} ({pct}%)")
+
+        key = (row.get("note_id"), row.get("content_hash"))
+        note = note_lookup.get(key)
+        if note is not None:
+            exact_matches += 1
+            note["_embedding_match_status"] = "exact"
+        else:
+            note = None
+            if row.get("note_id") not in exact_available_note_ids:
+                note = note_lookup_by_id.get(row.get("note_id"))
+            if note is not None:
+                fallback_matches += 1
+                note["_embedding_match_status"] = "fallback"
+        if note is None:
+            continue
+        try:
+            emb = np.frombuffer(row.get("embedding_blob"), dtype=np.float32)
+        except Exception:
+            continue
+        if emb.shape[0] != query_dim:
+            log_debug(
+                f"Embedding search: skipping note {row.get('note_id')} "
+                f"(dimension mismatch query={query_dim} stored={emb.shape[0]})"
+            )
+            continue
+        vectors.append(emb)
+        vector_notes.append(note)
+        if len(vectors) >= batch_size:
+            flush_batch()
+
+    flush_batch()
+    _set_embedding_match_diagnostics(total, exact_matches, fallback_matches)
+    log_debug(
+        "Embedding search bulk match diagnostics: "
+        f"rows={total}, exact_matches={exact_matches}, note_id_fallback_matches={fallback_matches}"
+    )
+    if not scored_notes:
+        return []
+
+    # If duplicate rows match a note, keep the strongest chunk score.
+    best_by_note_key = {}
+    for score, note in scored_notes:
+        key = (note.get("id"), note.get("chunk_index"), _note_content_hash(note))
+        if key not in best_by_note_key or score > best_by_note_key[key][0]:
+            best_by_note_key[key] = (score, note)
+    scored_notes = list(best_by_note_key.values())
+    scored_notes.sort(key=lambda item: (-item[0], note_order.get((item[1].get("id"), _note_content_hash(item[1])), 10**12)))
+    return scored_notes[:result_limit]
+
+
+def _run_embedding_search_fallback_loop(embedding_list, notes, db_path=None):
+    import array
+    import math
+
+    query_embedding = [float(x) for x in (embedding_list or [])]
+    query_dim = len(query_embedding)
+    query_norm = math.sqrt(sum(x * x for x in query_embedding))
+    if not query_dim or query_norm <= 0:
+        return None
+    query_embedding = [x / query_norm for x in query_embedding]
+
+    rows = load_embeddings_bulk(db_path=db_path)
+    if rows:
+        note_lookup = {
+            (note.get("id"), _note_content_hash(note)): note
+            for note in notes or []
+        }
+        note_lookup_by_id = {}
+        for note in notes or []:
+            note_lookup_by_id.setdefault(note.get("id"), note)
+        exact_available_note_ids = {
+            row.get("note_id")
+            for row in rows
+            if (row.get("note_id"), row.get("content_hash")) in note_lookup
+        }
+        iterable = []
+        exact_matches = 0
+        fallback_matches = 0
+        for row in rows:
+            note = note_lookup.get((row.get("note_id"), row.get("content_hash")))
+            if note is not None:
+                exact_matches += 1
+                note["_embedding_match_status"] = "exact"
+            else:
+                note = None
+                if row.get("note_id") not in exact_available_note_ids:
+                    note = note_lookup_by_id.get(row.get("note_id"))
+                if note is not None:
+                    fallback_matches += 1
+                    note["_embedding_match_status"] = "fallback"
+            if note is not None:
+                iterable.append((note, row.get("embedding_blob")))
+        log_debug(
+            "Embedding fallback-loop match diagnostics: "
+            f"rows={len(rows)}, exact_matches={exact_matches}, note_id_fallback_matches={fallback_matches}"
+        )
+        _set_embedding_match_diagnostics(len(rows), exact_matches, fallback_matches)
+    else:
+        _set_embedding_match_diagnostics(0, 0, 0)
+        iterable = []
+        for note in notes:
+            content_hash = _note_content_hash(note)
+            note_embedding = load_embedding(note.get("id"), content_hash, db_path=db_path)
+            if note_embedding is not None:
+                iterable.append((note, note_embedding))
+
+    scored_notes = []
+    for note, raw_embedding in iterable:
+        if raw_embedding is None:
+            continue
+        if isinstance(raw_embedding, (bytes, bytearray, memoryview)):
+            try:
+                emb = array.array("f")
+                emb.frombytes(bytes(raw_embedding))
+            except Exception:
+                continue
+        else:
+            emb = [float(x) for x in raw_embedding]
+        if len(emb) != query_dim:
+            log_debug(
+                f"Embedding search: skipping note {note.get('id')} "
+                f"(dimension mismatch query={query_dim} stored={len(emb)})"
+            )
+            continue
+        emb_norm = math.sqrt(sum(float(x) * float(x) for x in emb))
+        if emb_norm <= 0:
+            continue
+        similarity = sum(q * (float(e) / emb_norm) for q, e in zip(query_embedding, emb))
+        scored_notes.append(((similarity + 1.0) * 50.0, note))
+    scored_notes.sort(reverse=True, key=lambda x: x[0])
+    return scored_notes[:BULK_SEARCH_LIMIT]
+
+
 def _run_embedding_search_sync(embedding_query, notes, config, db_path=None):
 
 
@@ -46,26 +312,6 @@ def _run_embedding_search_sync(embedding_query, notes, config, db_path=None):
 
 
     db_path: from main thread so profile-specific path is correct in background."""
-
-
-
-    import hashlib
-
-
-
-    try:
-
-
-
-        import numpy as np
-
-
-
-    except ImportError:
-
-
-
-        return None
 
 
 
@@ -85,91 +331,11 @@ def _run_embedding_search_sync(embedding_query, notes, config, db_path=None):
 
 
 
-        query_embedding = np.array(embedding_list)
+        bulk_results = _run_embedding_search_bulk_numpy(embedding_list, notes, db_path=db_path)
+        if bulk_results is not None:
+            return bulk_results
 
-
-
-        query_dim = len(query_embedding)
-
-
-
-        total = len(notes)
-
-
-
-        scored_notes = []
-
-
-
-        for idx, note in enumerate(notes):
-
-
-
-            content_hash = note.get('content_hash')
-
-
-
-            from_note = content_hash is not None
-
-
-
-            if content_hash is None:
-
-
-
-                content_hash = hashlib.md5(note['content'].encode()).hexdigest()
-
-
-
-            note_embedding = load_embedding(note.get('id'), content_hash, db_path=db_path)
-
-
-
-            if note_embedding is not None:
-
-
-
-                emb = np.array(note_embedding)
-
-
-
-                if len(emb) != query_dim:
-
-
-
-                    log_debug(f"Embedding search: skipping note {note.get('id')} (dimension mismatch query={query_dim} stored={len(emb)})")
-
-
-
-                    continue
-
-
-
-                similarity = np.dot(query_embedding, emb) / (
-
-
-
-                    max(np.linalg.norm(query_embedding) * np.linalg.norm(emb), 1e-9)
-
-
-
-                )
-
-
-
-                score = (similarity + 1) * 50
-
-
-
-                scored_notes.append((score, note))
-
-
-
-        scored_notes.sort(reverse=True, key=lambda x: x[0])
-
-
-
-        return scored_notes[:80]
+        return _run_embedding_search_fallback_loop(embedding_list, notes, db_path=db_path)
 
 
 
@@ -256,37 +422,6 @@ class EmbeddingSearchWorker(QThread):
 
 
     def run(self):
-
-
-
-        import hashlib
-
-
-
-        try:
-
-
-
-            import numpy as np
-
-
-
-        except ImportError:
-
-
-
-            self.error_signal.emit("numpy not available")
-
-
-
-            self.finished_signal.emit(None)
-
-
-
-            return
-
-
-
         try:
 
 
@@ -307,111 +442,37 @@ class EmbeddingSearchWorker(QThread):
 
 
 
-            query_embedding = np.array(embedding_list)
-
-
-
             total = len(self.notes)
+            def _progress(done, count, message):
+                self.progress_signal.emit(done, count, message)
 
-
-
-            scored_notes = []
-
-
+            bulk_results = _run_embedding_search_bulk_numpy(
+                embedding_list,
+                self.notes,
+                db_path=getattr(self, "db_path", None),
+                progress_callback=_progress,
+                should_cancel=self.isInterruptionRequested,
+            )
+            if self.isInterruptionRequested():
+                self.finished_signal.emit(None)
+                return
+            if bulk_results is not None:
+                self.finished_signal.emit(bulk_results)
+                return
 
             progress_interval = max(50, total // 40)
-
-
-
-            for idx, note in enumerate(self.notes):
-
-
-
-                if self.isInterruptionRequested():
-
-
-
-                    self.finished_signal.emit(None)
-
-
-
-                    return
-
-
-
+            fallback_results = []
+            # Keep progress responsive while the fallback loop does per-note DB reads.
+            for idx, _note in enumerate(self.notes):
                 if idx % progress_interval == 0 or idx == total - 1:
-
-
-
                     pct = int(100 * (idx + 1) / total) if total else 0
-
-
-
                     self.progress_signal.emit(idx + 1, total, f"Embedding search: {idx + 1}/{total} ({pct}%)")
-
-
-
-                content_hash = note.get('content_hash')
-
-
-
-                if content_hash is None:
-
-
-
-                    content_hash = hashlib.md5(note['content'].encode()).hexdigest()
-
-
-
-                note_embedding = load_embedding(note.get('id'), content_hash, db_path=getattr(self, 'db_path', None))
-
-
-
-                if note_embedding is not None:
-
-
-
-                    emb = np.array(note_embedding)
-
-
-
-                    if len(emb) != len(query_embedding):
-
-
-
-                        log_debug(f"EmbeddingSearchWorker: skipping note {note.get('id')} (dimension mismatch query={len(query_embedding)} stored={len(emb)})")
-
-
-
-                        continue
-
-
-
-                    similarity = np.dot(query_embedding, emb) / (
-
-
-
-                        max(np.linalg.norm(query_embedding) * np.linalg.norm(emb), 1e-9)
-
-
-
-                    )
-
-
-
-                    score = (similarity + 1) * 50
-
-
-
-                    scored_notes.append((score, note))
-
-
-
-            scored_notes.sort(reverse=True, key=lambda x: x[0])
-
-
-
-            self.finished_signal.emit(scored_notes[:80])
+            fallback_results = _run_embedding_search_fallback_loop(
+                embedding_list,
+                self.notes,
+                db_path=getattr(self, "db_path", None),
+            )
+            self.finished_signal.emit(fallback_results)
 
 
 
@@ -500,6 +561,33 @@ def _get_cross_encoder(CrossEncoder, model_name):
     return _RERANK_MODEL_CACHE[model_name]
 
 
+def _clamp_display_relevance(value):
+    try:
+        return max(0, min(100, round(float(value))))
+    except Exception:
+        return 0
+
+
+def _log_rerank_score_scale(source, min_s, max_s, span, normalized, scaled):
+    try:
+        normalized_values = [float(rn) for rn, _note in (normalized or [])]
+        display_values = [
+            note.get("_display_relevance")
+            for _score, note in (scaled or [])[:8]
+            if note.get("_display_relevance") is not None
+        ]
+        log_debug(
+            "Rerank score scale: "
+            f"source={source}, raw_min={float(min_s):.6f}, raw_max={float(max_s):.6f}, "
+            f"raw_span={float(span):.6f}, "
+            f"normalized_min={min(normalized_values) if normalized_values else None}, "
+            f"normalized_max={max(normalized_values) if normalized_values else None}, "
+            f"display_relevance_sample={display_values}"
+        )
+    except Exception as exc:
+        log_debug(f"Rerank score scale logging failed: {exc}")
+
+
 
 
 
@@ -547,9 +635,9 @@ def _do_rerank(query, scored_notes, top_k, search_config):
 
     rerank_config = get_rerank_config(search_config)
     rerank_model = rerank_config.get("rerank_model") or DEFAULT_RERANK_MODEL
-    rerank_top_k = int(rerank_config.get("rerank_top_k") or RERANK_TOP_K_DEFAULT)
+    rerank_top_k = int(top_k or rerank_config.get("rerank_top_k") or RERANK_TOP_K_DEFAULT)
     rerank_timeout = int(rerank_config.get("rerank_timeout_seconds") or 90)
-    top_k = rerank_top_k
+    top_k = max(1, min(100, rerank_top_k))
     log_debug(f"Rerank model: {rerank_model}, top_k: {top_k}, timeout: {rerank_timeout}s")
 
 
@@ -746,7 +834,7 @@ def _do_rerank(query, scored_notes, top_k, search_config):
 
 
 
-                        note['_display_relevance'] = max(0, min(100, round((rn - 50) * 2)))
+                        note['_display_relevance'] = _clamp_display_relevance((rn - 50) * 2)
 
 
 
@@ -778,31 +866,7 @@ def _do_rerank(query, scored_notes, top_k, search_config):
 
 
 
-                    # Renormalize _display_relevance so top note(s) show 100% and rest spread below
-
-
-
-                    max_d = max((note.get('_display_relevance') or 0) for _, note in scaled)
-
-
-
-                    if max_d > 0:
-
-
-
-                        for _, note in scaled:
-
-
-
-                            p = note.get('_display_relevance')
-
-
-
-                            if p is not None:
-
-
-
-                                note['_display_relevance'] = max(0, min(100, round(100 * p / max_d)))
+                    _log_rerank_score_scale("external_helper", min_s, max_s, span, normalized, scaled)
 
 
 
@@ -1020,7 +1084,7 @@ def _do_rerank(query, scored_notes, top_k, search_config):
 
 
 
-            note['_display_relevance'] = max(0, min(100, round((rn - 50) * 2)))
+            note['_display_relevance'] = _clamp_display_relevance((rn - 50) * 2)
 
 
 
@@ -1052,31 +1116,7 @@ def _do_rerank(query, scored_notes, top_k, search_config):
 
 
 
-        # Renormalize _display_relevance so top note(s) show 100% and rest spread below
-
-
-
-        max_d = max((note.get('_display_relevance') or 0) for _, note in scaled)
-
-
-
-        if max_d > 0:
-
-
-
-            for _, note in scaled:
-
-
-
-                p = note.get('_display_relevance')
-
-
-
-                if p is not None:
-
-
-
-                    note['_display_relevance'] = max(0, min(100, round(100 * p / max_d)))
+        _log_rerank_score_scale("in_process", min_s, max_s, span, normalized, scaled)
 
 
 
@@ -1438,243 +1478,6 @@ class RerankWorker(QThread):
 
 
 
-class RelevanceRerankWorker(QThread):
-
-
-
-    """Worker for re-ranking notes by similarity to the AI answer (relevance-from-answer). Runs embeddings off the main thread to avoid lag."""
-
-
-
-    progress_signal = pyqtSignal(int, str)   # percent, message
-
-
-
-    finished_signal = pyqtSignal(object)     # new all_scored_notes or None on failure
-
-
-
-
-
-
-
-    def __init__(self, answer_text, note_texts, all_scored_notes, config):
-
-
-
-        super().__init__()
-
-
-
-        self.answer_text = answer_text
-
-
-
-        self.note_texts = note_texts
-
-
-
-        self.all_scored_notes = all_scored_notes
-
-
-
-        self.config = config
-
-
-
-
-
-
-
-    def run(self):
-
-
-
-        try:
-
-
-
-            import numpy as np
-
-            retrieval = get_retrieval_config(self.config)
-            retrieval_v2 = retrieval.get("retrieval_version") == "v2"
-
-            if retrieval_v2 and len(self.all_scored_notes) < 3:
-                log_debug("Relevance-from-answer skipped: fewer than 3 notes")
-                self.finished_signal.emit(None)
-                return
-
-            if retrieval_v2 and not (self.answer_text or "").strip():
-                log_debug("Relevance-from-answer skipped: empty answer")
-                self.finished_signal.emit(None)
-                return
-
-
-
-            self.progress_signal.emit(5, "Re-ranking by relevance... (embedding answer)")
-
-
-
-            answer_emb = get_embedding_for_query(self.answer_text, self.config)
-
-
-
-            if not answer_emb:
-
-                if retrieval_v2:
-                    log_debug("Relevance-from-answer skipped: answer embedding failed")
-
-
-                self.finished_signal.emit(None)
-
-
-
-                return
-
-
-
-            self.progress_signal.emit(20, "Re-ranking by relevance... (embedding notes)")
-
-
-
-            note_embs = get_embeddings_batch(self.note_texts, input_type="document", config=self.config)
-
-
-
-            if not note_embs or len(note_embs) != len(self.all_scored_notes):
-
-                if retrieval_v2:
-                    log_debug("Relevance-from-answer skipped: note embedding failed or count mismatch")
-
-
-                self.finished_signal.emit(None)
-
-
-
-                return
-
-
-
-            self.progress_signal.emit(70, "Re-ranking by relevance... (scoring)")
-
-
-
-            answer_vec = np.array(answer_emb, dtype=float)
-
-
-
-            norm_a = max(np.linalg.norm(answer_vec), 1e-9)
-
-
-
-            new_scores = []
-
-
-
-            for i, (_, note) in enumerate(self.all_scored_notes):
-
-
-
-                ne = np.array(note_embs[i], dtype=float)
-
-                if retrieval_v2 and len(ne) != len(answer_vec):
-                    log_debug("Relevance-from-answer skipped: embedding dimensions mismatch")
-                    self.finished_signal.emit(None)
-                    return
-
-
-
-                norm_n = max(np.linalg.norm(ne), 1e-9)
-
-
-
-                sim = float(np.dot(answer_vec, ne) / (norm_a * norm_n))
-
-
-
-                pct = max(0, min(100, round((sim + 1) * 50)))
-
-
-
-                note['_display_relevance'] = pct
-
-                if retrieval_v2:
-                    note['_answer_relevance_score'] = pct
-
-
-
-                new_scores.append((float(pct), note))
-
-            if retrieval_v2 and len(new_scores) >= 3:
-                normalized = np.array([score / 100.0 for score, _ in new_scores], dtype=float)
-                std = float(np.std(normalized))
-                if std < 0.01:
-                    log_debug(f"Relevance-from-answer skipped: flat scores std={std:.5f} < 0.01")
-                    self.finished_signal.emit(None)
-                    return
-
-
-
-            new_scores.sort(reverse=True, key=lambda x: x[0])
-
-
-
-            if new_scores:
-
-
-
-                max_pct = new_scores[0][0]
-
-
-
-                if max_pct > 0:
-
-
-
-                    for score, note in new_scores:
-
-
-
-                        note['_display_relevance'] = max(0, min(100, round(100 * (note['_display_relevance'] or 0) / max_pct)))
-
-
-
-                    new_scores = [(100.0 if i == 0 else (note['_display_relevance'] or 0), note) for i, (_, note) in enumerate(new_scores)]
-
-
-
-                    new_scores.sort(reverse=True, key=lambda x: x[0])
-
-
-
-            self.progress_signal.emit(100, "Re-ranking by relevance... (done)")
-
-
-
-            self.finished_signal.emit(new_scores)
-
-
-
-        except Exception as e:
-
-
-
-            log_debug(f"RelevanceRerankWorker error: {e}")
-
-
-
-            self.finished_signal.emit(None)
-
-
-
-
-
-
-
-
-
-
-
 # --- Answer Generation Workers ---
 
 class AskAIWorker(QThread):
@@ -1690,6 +1493,10 @@ class AskAIWorker(QThread):
 
 
     error_signal = pyqtSignal(str)
+
+
+
+    chunk_signal = pyqtSignal(str)
 
 
 
@@ -1741,7 +1548,7 @@ class AskAIWorker(QThread):
 
 
 
-                self._query, self._context_notes, self._context, self._config
+                self._query, self._context_notes, self._context, self._config, self.chunk_signal.emit
 
 
 
@@ -1761,4 +1568,55 @@ class AskAIWorker(QThread):
 
 
 
+            self.error_signal.emit(str(e))
+
+
+class DirectAIWorker(QThread):
+    """Run a direct no-retrieval AI answer in a background thread."""
+
+    success_signal = pyqtSignal(object)
+    error_signal = pyqtSignal(str)
+    chunk_signal = pyqtSignal(str)
+    warning_signal = pyqtSignal(str)
+
+    def __init__(self, dialog, query, chat_history, config, image_payloads=None, allow_image_fallback=True):
+        super().__init__()
+        self._dialog = dialog
+        self._query = query
+        self._chat_history = chat_history
+        self._config = config
+        self._image_payloads = list(image_payloads or [])
+        self._allow_image_fallback = bool(allow_image_fallback)
+
+    def _is_image_support_error(self, error):
+        return is_image_support_error(error)
+
+    def run(self):
+        try:
+            try:
+                answer = self._dialog.ask_ai_direct(
+                    self._query,
+                    self._chat_history,
+                    self._config,
+                    self.chunk_signal.emit,
+                    image_payloads=self._image_payloads,
+                )
+            except Exception as image_error:
+                if not self._image_payloads or not self._is_image_support_error(image_error):
+                    raise
+                if not self._allow_image_fallback:
+                    raise Exception(IMAGE_SUPPORT_ERROR)
+                self.warning_signal.emit(
+                    "The selected model does not support image input, so Ask AI retried using the current note text only."
+                )
+                answer = self._dialog.ask_ai_direct(
+                    self._query,
+                    self._chat_history,
+                    self._config,
+                    self.chunk_signal.emit,
+                    image_payloads=[],
+                )
+            self.success_signal.emit(answer)
+        except Exception as e:
+            log_debug(f"DirectAIWorker error: {e}")
             self.error_signal.emit(str(e))

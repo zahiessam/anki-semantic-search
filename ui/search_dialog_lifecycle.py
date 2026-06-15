@@ -121,6 +121,10 @@ def initialize_search_dialog(dialog, parent=None):
 
 
     theme = _addon_theme(is_dark)
+    primary_btn_bg = "#2f81f7" if is_dark else theme["accent"]
+    primary_btn_hover = "#4f9cff" if is_dark else theme["accent_hover"]
+    primary_btn_border = "#1f6feb" if is_dark else theme["accent_border"]
+    primary_btn_text = "#ffffff" if is_dark else theme["accent_text"]
 
 
 
@@ -172,47 +176,99 @@ def initialize_search_dialog(dialog, parent=None):
 
 
 
-        QPushButton {{ padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 12px; color: {theme['button_text']}; }}
+        QPushButton {{ padding: 7px 12px; border-radius: 6px; font-weight: bold; font-size: 12px; color: {theme['button_text']}; border: 1px solid {theme['control_border']}; }}
 
 
 
-        QPushButton#searchBtn {{ background-color: {theme['accent']}; border: none; }}
+        QPushButton#askAiBtn {{ background-color: transparent; border: 1px solid {theme['control_border']}; color: {theme['text']}; padding: 7px 12px; }}
 
 
 
-        QPushButton#searchBtn:hover {{ background-color: {theme['accent_hover']}; }}
+        QPushButton#askAiBtn:hover {{ background-color: {theme['panel_bg']}; border-color: {theme['control_hover_border']}; }}
 
 
 
-        QPushButton#settingsBtn {{ background-color: {theme['muted_btn']}; border: none; padding: 6px 12px; }}
+        QPushButton#askAiBtn:disabled {{ background-color: transparent; border-color: {theme['subtle_border']}; color: {theme['quiet_text']}; }}
 
 
 
-        QPushButton#settingsBtn:hover {{ background-color: {theme['muted_btn_hover']}; }}
+        QPushButton#findRelatedBtn {{ background-color: transparent; border: 1px solid {theme['control_border']}; color: {theme['text']}; padding: 7px 12px; }}
 
 
 
-        QPushButton#viewBtn {{ background-color: {theme['success']}; border: 2px solid {theme['success_border']}; color: {theme['button_text']}; }}
+        QPushButton#findRelatedBtn:hover {{ background-color: {theme['panel_bg']}; border-color: {theme['control_hover_border']}; }}
 
 
 
-        QPushButton#viewBtn:hover {{ background-color: {theme['success_hover']}; border-color: {theme['success']}; }}
+        QPushButton#findRelatedBtn:disabled {{ background-color: transparent; border-color: {theme['subtle_border']}; color: {theme['quiet_text']}; }}
 
 
 
-        QPushButton#viewBtn:disabled {{ background-color: {theme['muted_btn']}; border-color: {theme['panel_border']}; color: {theme['subtext']}; }}
+        QPushButton#searchBtn {{ background-color: {primary_btn_bg}; border: 1px solid {primary_btn_border}; color: {primary_btn_text}; padding: 7px 14px; }}
 
 
 
-        QPushButton#viewAllBtn {{ background-color: {theme['teal']}; border: 2px solid {theme['teal_border']}; color: {theme['button_text']}; }}
+        QPushButton#searchBtn:hover {{ background-color: {primary_btn_hover}; border-color: {primary_btn_bg}; }}
 
 
 
-        QPushButton#viewAllBtn:hover {{ background-color: {theme['teal_hover']}; border-color: {theme['teal']}; }}
+        QPushButton#searchBtn:disabled {{ background-color: {theme['muted_btn']}; border-color: {theme['subtle_border']}; color: {theme['quiet_text']}; }}
 
 
 
-        QPushButton#viewAllBtn:disabled {{ background-color: {theme['muted_btn']}; border-color: {theme['panel_border']}; color: {theme['subtext']}; }}
+        QPushButton#clearChatBtn {{ background-color: transparent; border: 1px solid {theme['control_border']}; color: {theme['text']}; padding: 7px 12px; }}
+
+
+
+        QPushButton#clearChatBtn:hover {{ background-color: {theme['panel_bg']}; border-color: {theme['control_hover_border']}; }}
+
+
+
+        QPushButton#clearChatBtn:disabled {{ background-color: transparent; border-color: {theme['subtle_border']}; color: {theme['quiet_text']}; }}
+
+
+
+        QPushButton#settingsBtn {{ background-color: transparent; border: 1px solid {theme['subtle_border']}; color: {theme['text']}; padding: 6px 12px; }}
+
+
+
+        QPushButton#settingsBtn:hover {{ background-color: {theme['panel_bg']}; border-color: {theme['control_hover_border']}; }}
+
+
+
+        QPushButton#viewBtn {{ background-color: transparent; border: 1px solid {theme['control_border']}; color: {theme['text']}; }}
+
+
+
+        QPushButton#viewBtn:hover {{ background-color: {theme['panel_bg']}; border-color: {theme['control_hover_border']}; }}
+
+
+
+        QPushButton#viewBtn:disabled {{ background-color: transparent; border-color: {theme['subtle_border']}; color: {theme['quiet_text']}; }}
+
+
+
+        QPushButton#viewAllBtn {{ background-color: transparent; border: 1px solid {theme['control_border']}; color: {theme['text']}; }}
+
+
+
+        QPushButton#viewAllBtn:hover {{ background-color: {theme['panel_bg']}; border-color: {theme['control_hover_border']}; }}
+
+
+
+        QPushButton#viewAllBtn:disabled {{ background-color: transparent; border-color: {theme['subtle_border']}; color: {theme['quiet_text']}; }}
+
+
+
+        QPushButton#showAllDynamicResultsBtn {{ background-color: transparent; border: 1px solid {theme['subtle_border']}; color: {theme['subtext']}; padding: 6px 10px; font-weight: 600; }}
+
+
+
+        QPushButton#showAllDynamicResultsBtn:hover {{ background-color: {theme['panel_bg']}; border-color: {theme['control_hover_border']}; color: {theme['text']}; }}
+
+
+
+        QPushButton#showAllDynamicResultsBtn:disabled {{ background-color: transparent; border-color: {theme['subtle_border']}; color: {theme['quiet_text']}; }}
 
 
 
@@ -224,15 +280,15 @@ def initialize_search_dialog(dialog, parent=None):
 
 
 
-        QPushButton#toggleSelectBtn {{ background-color: {theme['accent']}; border: 2px solid {theme['accent_border']}; color: {theme['button_text']}; padding: 4px 8px; font-size: 11px; }}
+        QPushButton#toggleSelectBtn {{ background-color: transparent; border: 1px solid {theme['control_border']}; color: {theme['text']}; padding: 4px 8px; font-size: 11px; }}
 
 
 
-        QPushButton#toggleSelectBtn:hover {{ background-color: {theme['accent_hover']}; border-color: {theme['accent']}; }}
+        QPushButton#toggleSelectBtn:hover {{ background-color: {theme['panel_bg']}; border-color: {theme['control_hover_border']}; }}
 
 
 
-        QPushButton#toggleSelectBtn:disabled {{ background-color: {theme['muted_btn']}; border-color: {theme['panel_border']}; color: {theme['subtext']}; }}
+        QPushButton#toggleSelectBtn:disabled {{ background-color: transparent; border-color: {theme['subtle_border']}; color: {theme['quiet_text']}; }}
 
 
 
@@ -240,7 +296,7 @@ def initialize_search_dialog(dialog, parent=None):
 
 
 
-            border: 2px solid {theme['border']};
+            border: 1px solid {theme['subtle_border']};
 
 
 
@@ -256,7 +312,7 @@ def initialize_search_dialog(dialog, parent=None):
 
 
 
-            gridline-color: {theme['panel_border']};
+            gridline-color: {theme['field_row_border']};
 
 
 
@@ -268,7 +324,7 @@ def initialize_search_dialog(dialog, parent=None):
 
 
 
-        QTableWidget::item {{ padding: 8px; border: none; }}
+        QTableWidget::item {{ padding: 5px 6px; border: none; }}
 
 
 
@@ -276,11 +332,11 @@ def initialize_search_dialog(dialog, parent=None):
 
 
 
-        QTableWidget::item:selected {{ background-color: {theme['accent']}; color: {theme['selected_text']}; font-weight: 700; }}
+        QTableWidget::item:selected {{ background-color: {theme['section_header_checked']}; color: {theme['text']}; font-weight: 700; }}
 
 
 
-        QTableWidget::item:selected:hover {{ background-color: {theme['accent_hover']}; }}
+        QTableWidget::item:selected:hover {{ background-color: {theme['panel_bg']}; }}
 
 
 
@@ -312,7 +368,7 @@ def initialize_search_dialog(dialog, parent=None):
 
             border: 2px solid {theme['selected_text']};
 
-            background-color: {theme['success']};
+            background-color: {theme['accent']};
 
         }}
 
@@ -322,7 +378,7 @@ def initialize_search_dialog(dialog, parent=None):
 
             border: 2px solid {theme['selected_text']};
 
-            background-color: {theme['success']};
+            background-color: {theme['accent']};
 
         }}
 
@@ -332,7 +388,7 @@ def initialize_search_dialog(dialog, parent=None):
 
 
 
-            background-color: {theme['header_bg']};
+            background-color: {theme['section_header_bg']};
 
 
 
@@ -340,11 +396,11 @@ def initialize_search_dialog(dialog, parent=None):
 
 
 
-            padding: 8px;
+            padding: 6px 8px;
 
 
 
-            border: 1px solid {theme['panel_border']};
+            border: 1px solid {theme['field_row_border']};
 
 
 
@@ -356,11 +412,11 @@ def initialize_search_dialog(dialog, parent=None):
 
 
 
-        QSlider::groove:horizontal {{ border: 1px solid {theme['panel_border']}; height: 8px; background: {theme['input_bg']}; border-radius: 4px; }}
+        QSlider::groove:horizontal {{ border: 1px solid {theme['subtle_border']}; height: 6px; background: {theme['input_bg']}; border-radius: 3px; }}
 
 
 
-        QSlider::handle:horizontal {{ background: {theme['accent']}; border: 1px solid {theme['accent_hover']}; width: 18px; margin: -5px 0; border-radius: 9px; }}
+        QSlider::handle:horizontal {{ background: {theme['accent']}; border: 1px solid {theme['accent_border']}; width: 16px; margin: -5px 0; border-radius: 8px; }}
 
 
 
@@ -378,7 +434,7 @@ def initialize_search_dialog(dialog, parent=None):
 
             color: {theme['text']};
 
-            border: 1px solid {theme['success_border']};
+            border: 1px solid {theme['subtle_border']};
 
             border-radius: 4px;
 

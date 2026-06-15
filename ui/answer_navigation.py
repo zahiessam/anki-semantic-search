@@ -78,11 +78,8 @@ def _highlight_result_notes(self, note_ids, scroll_to_note_id=None, scroll_to_re
     if not hasattr(self, 'results_list') or not self.results_list.selectionModel():
         return
 
-    selection_model = self.results_list.selectionModel()
-    selection_model.clearSelection()
+    target_rows = []
     target_item = None
-    flags = QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
-
     for row in range(self.results_list.rowCount()):
         ref_item = self.results_list.item(row, 1)
         content_item = self.results_list.item(row, 2)
@@ -94,9 +91,30 @@ def _highlight_result_notes(self, note_ids, scroll_to_note_id=None, scroll_to_re
         is_target_note = scroll_to_note_id is not None and note_id == scroll_to_note_id
 
         if note_id in note_ids or is_target_ref or is_target_note:
-            selection_model.select(self.results_list.model().index(row, 0), flags)
+            target_rows.append(row)
             if is_target_ref or is_target_note:
                 target_item = content_item
+
+    if not target_rows:
+        return
+
+    selection_model = self.results_list.selectionModel()
+    selected_rows = {index.row() for index in selection_model.selectedRows()}
+    if selected_rows == set(target_rows):
+        if target_item:
+            self.results_list.scrollToItem(target_item)
+        return
+
+    flags = QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
+    previous_table_blocked = self.results_list.blockSignals(True)
+    previous_selection_blocked = selection_model.blockSignals(True)
+    try:
+        selection_model.clearSelection()
+        for row in target_rows:
+            selection_model.select(self.results_list.model().index(row, 0), flags)
+    finally:
+        selection_model.blockSignals(previous_selection_blocked)
+        self.results_list.blockSignals(previous_table_blocked)
 
     if target_item:
         self.results_list.scrollToItem(target_item)
@@ -115,7 +133,6 @@ def _on_answer_link_clicked(self, url):
 
 
 
-    saved_html = getattr(self, '_last_formatted_answer', None) or (self.answer_box.toHtml() if hasattr(self.answer_box, 'toHtml') else None)
     saved_scroll = _answer_scroll_value(self)
 
 
@@ -125,22 +142,13 @@ def _on_answer_link_clicked(self, url):
 
 
     if not s:
-
-
-
-        if saved_html:
-
-
-
-            self._restore_answer_html(saved_html, saved_scroll)
-
-
-
+        _restore_answer_scroll(self, saved_scroll)
         return
 
 
 
     ctx = getattr(self, '_context_note_ids', None) or []
+    scoped_message = None
 
 
 
@@ -154,7 +162,21 @@ def _on_answer_link_clicked(self, url):
 
     if s.startswith('cite:'):
         try:
-            num = int(s.split(':', 1)[1].strip())
+            cite_parts = s.split(':')
+            if len(cite_parts) >= 3:
+                scoped_message = self._chat_message_by_id(cite_parts[1]) if hasattr(self, "_chat_message_by_id") else None
+                if scoped_message is None:
+                    tooltip("Source notes for this answer are not available.")
+                    _restore_answer_scroll(self, saved_scroll)
+                    return
+                if hasattr(self, "_restore_source_snapshot_for_message"):
+                    if not self._restore_source_snapshot_for_message(scoped_message):
+                        _restore_answer_scroll(self, saved_scroll)
+                        return
+                ctx = scoped_message.get("context_note_ids") or []
+                num = int(cite_parts[2].strip())
+            else:
+                num = int(s.split(':', 1)[1].strip())
 
             if 1 <= num <= len(ctx):
 
@@ -257,17 +279,7 @@ def _on_answer_link_clicked(self, url):
 
 
     if note_id is None:
-
-
-
-        if saved_html:
-
-
-
-            self._restore_answer_html(saved_html, saved_scroll)
-
-
-
+        _restore_answer_scroll(self, saved_scroll)
         return
 
 
@@ -327,11 +339,7 @@ def _on_answer_link_clicked(self, url):
 
     _highlight_result_notes(self, {note_id}, scroll_to_note_id=note_id, scroll_to_ref=num)
 
-    if saved_html:
-
-
-
-        QTimer.singleShot(0, lambda h=saved_html, v=saved_scroll: self._restore_answer_html(h, v))
+    QTimer.singleShot(0, lambda v=saved_scroll: _restore_answer_scroll(self, v))
 
 
 
@@ -363,7 +371,7 @@ def _bring_browser_to_front(self, browser):
 
 
 
-def _open_note_in_browser(self, note_id, num):
+def _open_note_in_browser(self, note_id, num=None):
 
 
 
@@ -455,12 +463,21 @@ def copy_answer_to_clipboard(self):
 
 
 
-            tooltip("Copied (paste into Word for bullets and formatting)")
-
-
+        tooltip("Copied (paste into Word for bullets and formatting)")
 
     else:
 
 
 
         tooltip("No answer to copy")
+
+
+class SearchAnswerNavigationMixin:
+    """Owns citation navigation, browser opening, and answer clipboard actions."""
+
+    _restore_answer_html = _restore_answer_html
+    _on_answer_link_clicked = _on_answer_link_clicked
+    _citation_timer_clear = _citation_timer_clear
+    _bring_browser_to_front = _bring_browser_to_front
+    _open_note_in_browser = _open_note_in_browser
+    copy_answer_to_clipboard = copy_answer_to_clipboard

@@ -46,7 +46,34 @@ def toggle_sidebar_visibility(visible: bool, dialogs_module=None):
         sidebar.hide()
 
 
-def show_search_dialog(dialogs_module=None):
+def _apply_initial_search(dialog, initial_query=None, auto_search=False, search_mode=None):
+    if search_mode and hasattr(dialog, "set_search_mode"):
+        dialog.set_search_mode(search_mode)
+    query = str(initial_query or "").strip()
+    if query and hasattr(dialog, "_set_query_text"):
+        dialog._set_query_text(query)
+    if auto_search and query and hasattr(dialog, "perform_search"):
+        QTimer.singleShot(0, dialog.perform_search)
+
+
+def _apply_review_context(dialog, review_card=None, review_note_id=None, review_context=None):
+    if hasattr(dialog, "set_review_context"):
+        dialog.set_review_context(
+            review_card=review_card,
+            review_note_id=review_note_id,
+            review_context=review_context,
+        )
+
+
+def show_search_dialog(
+    initial_query=None,
+    auto_search=False,
+    dialogs_module=None,
+    review_card=None,
+    review_note_id=None,
+    review_context=None,
+    search_mode=None,
+):
     global _ai_search_dialog_instance
     dialogs_module = _dialogs_module(dialogs_module)
     sidebar_toggle = getattr(dialogs_module, "toggle_sidebar_visibility", toggle_sidebar_visibility)
@@ -63,15 +90,25 @@ def show_search_dialog(dialogs_module=None):
                 if _ai_search_dialog_instance.isVisible():
                     _ai_search_dialog_instance.raise_()
                     _ai_search_dialog_instance.activateWindow()
+                    _apply_review_context(_ai_search_dialog_instance, review_card, review_note_id, review_context)
+                    _apply_initial_search(_ai_search_dialog_instance, initial_query, auto_search, search_mode)
                     return
                 _ai_search_dialog_instance.show()
+                _apply_review_context(_ai_search_dialog_instance, review_card, review_note_id, review_context)
+                _apply_initial_search(_ai_search_dialog_instance, initial_query, auto_search, search_mode)
                 return
             except (RuntimeError, AttributeError):
                 _ai_search_dialog_instance = None
 
-        _ai_search_dialog_instance = dialogs_module.AISearchDialog(mw)
+        _ai_search_dialog_instance = dialogs_module.AISearchDialog(
+            mw,
+            review_card=review_card,
+            review_note_id=review_note_id,
+            review_context=review_context,
+        )
         _ai_search_dialog_instance.finished.connect(lambda: _on_search_dialog_closed(dialogs_module))
         _ai_search_dialog_instance.show()
+        _apply_initial_search(_ai_search_dialog_instance, initial_query, auto_search, search_mode)
     finally:
         QTimer.singleShot(400, lambda: setattr(mw, "_is_spawning_dialog", False))
 

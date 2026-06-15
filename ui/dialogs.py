@@ -1,4 +1,4 @@
-# ============================================================================
+﻿# ============================================================================
 # Imports
 # ============================================================================
 
@@ -28,21 +28,45 @@ from aqt import mw, gui_hooks, dialogs
 from aqt.utils import askUser, showInfo, showText, tooltip
 from anki.hooks import addHook
 from . import dialog_entrypoints as _dialog_entrypoints
-from . import answer_formatting
-from . import answer_navigation
-from . import embedding_helpers
-from . import note_content
-from . import query_enhancement
-from . import search_dialog_state
-from . import search_dialog_ui
 from . import search_dialog_lifecycle
+from .answer_formatting import SearchAnswerFormattingMixin
+from .answer_navigation import SearchAnswerNavigationMixin
+from .search_chat_mixin import SearchChatMixin
+from .search_answer_display_mixin import SearchAnswerDisplayMixin
+from .search_answer_workflow_mixin import SearchAnswerWorkflowMixin
+from .search_anthropic_streaming_mixin import SearchAnthropicStreamingMixin
 from .search_browser_actions_mixin import SearchBrowserActionsMixin
+from .search_context_planning_mixin import SearchContextPlanningMixin
+from .search_cross_encoder_rerank_mixin import SearchCrossEncoderRerankMixin
+from .search_dialog_state import SearchDialogStateMixin
+from .search_dialog_ui import SearchDialogUiMixin
+from .embedding_helpers import SearchEmbeddingHelpersMixin
+from .search_keyword_filter_mixin import SearchKeywordFilterMixin
+from .search_keyword_continue_mixin import SearchKeywordContinueMixin
+from .search_mmr_mixin import SearchMMRMixin
 from .search_model_selection_mixin import SearchModelSelectionMixin
 from .search_note_preview_mixin import SearchNotePreviewMixin
+from .search_notifications_mixin import SearchNotificationsMixin
+from .search_continuation_mixin import SearchContinuationMixin
+from .search_execution_mixin import SearchExecutionMixin
+from .search_image_attachment_mixin import SearchImageAttachmentMixin
+from .search_orchestration_mixin import SearchOrchestrationMixin
 from .search_progress_mixin import SearchProgressMixin
-from .search_research_mixin import SearchResearchMixin
+from .search_provider_calls_mixin import SearchProviderCallsMixin
+from .search_analytics_mixin import SearchAnalyticsMixin
+from .search_result_display_mixin import SearchResultDisplayMixin
+from .search_result_explainability_mixin import SearchResultExplainabilityMixin
 from .search_selection_mixin import SearchSelectionMixin
 from .search_source_labels_mixin import SearchSourceLabelsMixin
+from .note_content import SearchNoteContentMixin
+from .query_enhancement import SearchQueryEnhancementMixin
+from .search_dialog_shared import (
+    _agent_debug_log,
+    _prefilter_safety_reason,
+    _session_debug_log,
+    get_notes_content_with_col,
+    get_safe_config,
+)
 
 # Local imports
 from .theme import get_addon_theme
@@ -75,7 +99,7 @@ from ..utils import (
     save_search_history,
     clear_search_history,
 )
-from ..utils.text import unescape_string, clean_html, clean_html_for_display, reveal_cloze, semantic_chunk_text
+from ..utils.text import unescape_string, clean_html, clean_html_for_display, reveal_cloze, semantic_chunk_text, build_searchable_note_chunks
 from ..utils.config import VOYAGE_EMBEDDING_MODELS
 from ..core.engine import (
     get_ollama_models,
@@ -88,12 +112,11 @@ from ..core.engine import (
     count_notes_matching_config,
     analyze_note_eligibility,
     get_embedding_engine_id,
-    migrate_embeddings_json_to_db,
     get_embedding_for_query,
     load_checkpoint,
     clear_checkpoint,
     extract_keywords_improved,
-    compute_tfidf_scores,
+    compute_bm25_scores,
     aggregate_scored_notes_by_note_id,
     load_embedding,
     save_embedding,
@@ -111,209 +134,8 @@ ADDON_NAME = get_addon_name()
 _semantic_chunk_text = semantic_chunk_text
 
 
-def _prefilter_safety_reason(col, ntf, config):
-    """Return None when V2 can safely prefilter before loading full note text.
-
-    Unsafe cases deliberately fall back to the historical full loading path:
-    ambiguous/missing decks, unknown note types, missing selected fields without
-    first-field fallback, all-fields search across unknown/mixed types, or cached
-    history replay paths where note context must match prior results.
-    """
-    retrieval = get_retrieval_config(config)
-    if retrieval.get("retrieval_version") != "v2":
-        return "retrieval_version is legacy"
-    if not ntf:
-        return "no note_type_filter configured"
-    if config.get("_history_replay"):
-        return "history replay is active"
-
-    enabled_decks = ntf.get("enabled_decks") or []
-    if enabled_decks:
-        try:
-            all_decks = set(col.decks.all_names())
-        except Exception:
-            return "could not resolve deck names"
-        missing_decks = [deck for deck in enabled_decks if deck not in all_decks]
-        if missing_decks:
-            return f"selected deck(s) not found: {missing_decks[:3]}"
-
-    models = col.models.all()
-    model_by_name = {model.get("name"): model for model in models}
-    enabled_types = ntf.get("enabled_note_types") or []
-    if enabled_types:
-        missing_types = [name for name in enabled_types if name not in model_by_name]
-        if missing_types:
-            return f"selected note type(s) not found: {missing_types[:3]}"
-
-    search_all = bool(ntf.get("search_all_fields", False))
-    if search_all and not enabled_types:
-        return "all-fields search across unknown/mixed note types"
-
-    if not search_all:
-        ntf_fields = ntf.get("note_type_fields") or {}
-        use_first = bool(ntf.get("use_first_field_fallback", True))
-        type_names = enabled_types or list(model_by_name)
-        for model_name in type_names:
-            model = model_by_name.get(model_name)
-            if not model:
-                continue
-            available = {field.get("name", "").lower() for field in model.get("flds", [])}
-            wanted = {field.lower() for field in (ntf_fields.get(model_name) or [])}
-            if wanted and not wanted.issubset(available):
-                return f"selected field missing on {model_name}"
-            if not wanted and not use_first:
-                return f"no fields selected for {model_name} and first-field fallback disabled"
-
-    return None
-
-
-def get_safe_config(value):
-    """Return config-like data with secrets redacted for logging."""
-    secret_markers = ("api_key", "token", "secret", "password")
-
-    if isinstance(value, dict):
-        safe = {}
-        for key, item in value.items():
-            key_str = str(key).lower()
-            if any(marker in key_str for marker in secret_markers):
-                safe[key] = "***REDACTED***" if item else item
-            else:
-                safe[key] = get_safe_config(item)
-        return safe
-
-    if isinstance(value, list):
-        return [get_safe_config(item) for item in value]
-
-    return value
-
-
-def get_notes_content_with_col(col, config):
-    """Load searchable note content in a background QueryOp using the provided collection."""
-    notes_data = []
-    ntf = (config or {}).get('note_type_filter', {}) or {}
-
-    if ntf.get('fields_to_search') and not ntf.get('note_type_fields'):
-        global_flds = set(f.lower() for f in ntf['fields_to_search'])
-        ntf = dict(ntf)
-        ntf['note_type_fields'] = {}
-        for model in col.models.all():
-            field_names = [fld['name'] for fld in model.get('flds', [])]
-            ntf['note_type_fields'][model['name']] = [
-                field_name for field_name in field_names if field_name.lower() in global_flds
-            ]
-
-    legacy_fields = None
-    if not ntf:
-        enabled_set = None
-        search_all = False
-        ntf_fields = {}
-        use_first = False
-        legacy_fields = {'text', 'extra'}
-        fields_description = "Text & Extra"
-    else:
-        enabled = ntf.get('enabled_note_types')
-        enabled_set = set(enabled) if enabled else None
-        search_all = bool(ntf.get('search_all_fields', False))
-        ntf_fields = ntf.get('note_type_fields') or {}
-        use_first = bool(ntf.get('use_first_field_fallback', True))
-        fields_description = "all fields" if search_all else "per-type"
-
-    safety_reason = _prefilter_safety_reason(col, ntf, config)
-    retrieval = get_retrieval_config(config)
-    if retrieval.get("retrieval_version") == "v2":
-        if safety_reason:
-            log_debug(f"V2 note prefilter fallback: {safety_reason}")
-        else:
-            log_debug("V2 note prefilter safe: deck/note-type/field filters resolved")
-
-    deck_q = _build_deck_query(ntf.get('enabled_decks') if ntf else None)
-    note_ids = col.find_notes(deck_q) if deck_q else col.find_notes("")
-    total_notes = len(note_ids)
-    cache_key = (
-        deck_q or '',
-        frozenset(enabled_set) if enabled_set is not None else None,
-        search_all,
-        tuple(sorted((k, tuple(v) if isinstance(v, list) else v) for k, v in ntf_fields.items())),
-        total_notes,
-    )
-
-    model_map = {}
-    for model in col.models.all():
-        mid = model['id']
-        model_name = model['name']
-        if enabled_set is not None and model_name not in enabled_set:
-            continue
-        flds = model.get('flds', [])
-        if search_all:
-            indices = list(range(len(flds)))
-        else:
-            if legacy_fields is not None:
-                wanted = legacy_fields
-            else:
-                wanted = set(f.lower() for f in (ntf_fields.get(model_name) or []))
-                if not wanted and use_first and flds:
-                    wanted = {flds[0]['name'].lower()}
-            indices = [i for i, field in enumerate(flds) if field['name'].lower() in wanted]
-        if indices:
-            model_map[mid] = (model_name, indices)
-
-    if not note_ids:
-        return notes_data, fields_description, cache_key
-
-    chunk_target = 500
-    id_list = ",".join(map(str, note_ids))
-    for nid, mid, flds_str in col.db.execute(f"select id, mid, flds from notes where id in ({id_list})"):
-        model_info = model_map.get(mid)
-        if not model_info:
-            continue
-        model_name, indices = model_info
-        fields = (flds_str or "").split("\x1f")
-        content_parts = []
-        for index in indices:
-            if index < len(fields):
-                value = fields[index].strip()
-                if value:
-                    content_parts.append(value)
-        if not content_parts:
-            continue
-
-        raw_content = " | ".join(content_parts)
-        content = clean_html(raw_content).strip()
-        if not content:
-            continue
-        display_parts = []
-        for part in content_parts:
-            display_part = clean_html_for_display(part).strip()
-            if display_part:
-                display_parts.append(display_part)
-        display_content = " | ".join(display_parts) or content
-
-        chunks = _semantic_chunk_text(content, chunk_target)
-        if len(chunks) <= 1:
-            content_hash = hashlib.md5(content.encode()).hexdigest()
-            notes_data.append({
-                'id': nid,
-                'content': content,
-                'content_hash': content_hash,
-                'model': model_name,
-                'display_content': display_content,
-            })
-            continue
-
-        for chunk_idx, chunk in enumerate(chunks):
-            chunk_hash = hashlib.md5(chunk.encode()).hexdigest()
-            notes_data.append({
-                'id': nid,
-                'content': chunk,
-                'content_hash': chunk_hash,
-                'model': model_name,
-                'display_content': clean_html_for_display(chunk).strip() or chunk,
-                'chunk_index': chunk_idx,
-                '_full_content': content,
-                '_full_display_content': display_content,
-            })
-
-    return notes_data, fields_description, cache_key
+# Search-dialog shared helpers are imported from search_dialog_shared and
+# re-exported here for compatibility with older import paths.
 
 # --- Regular Expression Constants ---
 
@@ -331,565 +153,70 @@ MD_UNTERMINATED_BOLD_RE = re.compile(r'\*\*([^*]+)$')
 WORD_BOUNDARY_RE = re.compile(r'\b\w+\b')
 DIGIT_RE = re.compile(r'\d+')
 
-# --- Debug Logging Helpers ---
-
-def _session_debug_log(hypothesis_id, location, message, data=None):
-    """Write NDJSON to session log file for debug."""
-    try:
-        entry = {
-            "sessionId": "85902e",
-            "timestamp": int(time.time() * 1000),
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data or {},
-        }
-        addon_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        log_path = os.path.join(addon_dir, "user_files", "debug-85902e.log")
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-
-def _agent_debug_log(run_id, hypothesis_id, location, message, data=None):
-    """Lightweight debug logger for agent-driven investigations."""
-    try:
-        entry = {
-            "id": f"log_{int(time.time() * 1000)}",
-            "timestamp": int(time.time() * 1000),
-            "runId": run_id,
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data or {},
-        }
-        addon_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        log_path = os.path.join(addon_dir, "user_files", "debug.log")
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-
 # ============================================================================
 # AI Search Dialog
 # ============================================================================
 
-class AISearchDialog(QDialog, SearchResearchMixin, SearchProgressMixin, SearchBrowserActionsMixin, SearchSelectionMixin, SearchNotePreviewMixin, SearchSourceLabelsMixin, SearchModelSelectionMixin):
+class AISearchDialog(
+    SearchImageAttachmentMixin,
+    SearchDialogUiMixin,
+    SearchDialogStateMixin,
+    SearchAnswerFormattingMixin,
+    SearchChatMixin,
+    SearchAnswerNavigationMixin,
+    SearchNoteContentMixin,
+    SearchEmbeddingHelpersMixin,
+    SearchQueryEnhancementMixin,
+    SearchAnalyticsMixin,
+    SearchProgressMixin,
+    SearchBrowserActionsMixin,
+    SearchSelectionMixin,
+    SearchNotePreviewMixin,
+    SearchNotificationsMixin,
+    SearchResultExplainabilityMixin,
+    SearchResultDisplayMixin,
+    SearchAnswerDisplayMixin,
+    SearchAnswerWorkflowMixin,
+    SearchAnthropicStreamingMixin,
+    SearchKeywordFilterMixin,
+    SearchKeywordContinueMixin,
+    SearchExecutionMixin,
+    SearchContinuationMixin,
+    SearchOrchestrationMixin,
+    SearchMMRMixin,
+    SearchCrossEncoderRerankMixin,
+    SearchProviderCallsMixin,
+    SearchSourceLabelsMixin,
+    SearchModelSelectionMixin,
+    SearchContextPlanningMixin,
+    QDialog,
+):
 
 
 
     # --- Lifecycle And Window Setup ---
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, review_card=None, review_note_id=None, review_context=None):
+        initial_review_context = {
+            "review_card": review_card,
+            "review_note_id": review_note_id,
+            "review_context": review_context,
+        }
         search_dialog_lifecycle.initialize_search_dialog(self, parent)
+        if hasattr(self, "set_review_context"):
+            self.set_review_context(**initial_review_context)
 
+    def closeEvent(self, event):
+        try:
+            session_memory = getattr(self, "_agentic_session_memory", None)
+            if session_memory is not None and hasattr(session_memory, "clear"):
+                session_memory.clear()
+        except Exception:
+            pass
+        super().closeEvent(event)
 
 
 
-
-
-
-    # --- Search Entry Points ---
-
-    def perform_search(self):
-
-
-
-        """
-
-
-
-        Bridge method so AISearchDialog always has perform_search.
-
-
-
-        Delegates to the implementation that was originally defined on EmbeddingSearchWorker.
-
-
-
-        """
-
-
-
-        return EmbeddingSearchWorker.perform_search(self)
-
-
-
-
-
-
-
-    # --- Defaults And UI Construction ---
-
-    def reset_to_medical_defaults(self):
-        return search_dialog_ui.reset_to_medical_defaults(self)
-
-
-
-    def setup_ui(self):
-        return search_dialog_ui.setup_ui(self)
-
-
-
-
-
-
-
-    # --- Search History And Scope Banner ---
-
-    def _update_view_all_button_state(self):
-        return search_dialog_state._update_view_all_button_state(self)
-
-
-
-
-
-
-
-    def showEvent(self, event):
-        return search_dialog_state.showEvent(self, event)
-
-
-
-
-
-
-
-    def _refresh_scope_banner(self):
-        return search_dialog_state._refresh_scope_banner(self)
-
-
-
-
-
-
-
-    def _on_search_history_selected(self, index):
-        return search_dialog_state._on_search_history_selected(self, index)
-
-
-
-
-
-
-
-    def _on_sidebar_history_selected(self, item):
-        return search_dialog_state._on_sidebar_history_selected(self, item)
-
-
-
-
-
-
-
-    def _set_query_text(self, text):
-        return search_dialog_state._set_query_text(self, text)
-
-
-
-
-
-
-
-    def _clear_query_loaded_status(self):
-        return search_dialog_state._clear_query_loaded_status(self)
-
-
-
-
-
-
-
-    def _on_clear_search_history(self):
-        return search_dialog_state._on_clear_search_history(self)
-
-
-
-
-
-
-
-    def _refresh_search_history(self):
-        return search_dialog_state._refresh_search_history(self)
-
-
-
-
-
-
-
-    # --- Relevance And Display Options ---
-
-    def on_item_changed(self, item):
-        return search_dialog_state.on_item_changed(self, item)
-
-
-
-
-
-
-
-    def _on_relevance_mode_changed(self, mode_key, checked):
-        return search_dialog_state._on_relevance_mode_changed(self, mode_key, checked)
-
-
-
-
-
-
-
-    def on_sensitivity_changed(self, value):
-        return search_dialog_state.on_sensitivity_changed(self, value)
-
-
-
-
-
-
-
-    def _on_show_only_cited_changed(self, checked):
-        return search_dialog_state._on_show_only_cited_changed(self, checked)
-
-
-
-
-
-
-
-    # --- Answer Formatting And Citation Navigation ---
-
-    def _restore_answer_html(self, html, scroll_value=None):
-        return answer_navigation._restore_answer_html(self, html, scroll_value)
-
-
-
-
-
-
-
-    def _on_answer_link_clicked(self, url):
-        return answer_navigation._on_answer_link_clicked(self, url)
-
-
-
-
-
-
-
-    def _citation_timer_clear(self):
-        return answer_navigation._citation_timer_clear(self)
-
-
-
-
-
-
-
-    def _bring_browser_to_front(self, browser):
-        return answer_navigation._bring_browser_to_front(self, browser)
-
-
-
-
-
-
-
-    def _open_note_in_browser(self, note_id, num=None):
-        return answer_navigation._open_note_in_browser(self, note_id, num)
-
-
-
-
-
-
-
-    def _spacing_styles(self):
-        return answer_formatting.spacing_styles(self.styling_config.get('answer_spacing', 'normal'))
-
-
-
-
-
-    def format_answer(self, answer):
-        return answer_formatting.format_answer_html(
-            answer,
-            getattr(self, '_context_note_ids', None) or [],
-            self.styling_config.get('answer_spacing', 'normal'),
-            {
-                'citation_n': CITATION_N_RE,
-                'citation': CITATION_RE,
-                'md_bold': MD_BOLD_RE,
-                'md_unterminated_bold': MD_UNTERMINATED_BOLD_RE,
-                'md_bold_alt': MD_BOLD_ALT_RE,
-                'md_header': MD_HEADER_RE,
-                'md_highlight': MD_HIGHLIGHT_RE,
-            },
-        )
-
-
-
-
-
-
-
-    # --- Clipboard, Settings, And Config Access ---
-
-    def copy_answer_to_clipboard(self):
-        return answer_navigation.copy_answer_to_clipboard(self)
-
-
-
-
-
-
-
-    def open_settings(self):
-        return search_dialog_state.open_settings(self)
-
-
-
-
-
-
-
-    def get_config(self):
-        return search_dialog_state.get_config(self)
-
-
-
-
-
-
-
-    # --- Note Collection And Text Preparation ---
-
-    def get_all_notes_content(self):
-        return note_content.get_all_notes_content(self)
-
-
-
-
-
-    # --- Keyword And TF-IDF Helpers ---
-
-    def _aggregate_scored_notes_by_note_id(self, scored_notes):
-        return note_content.aggregate_scored_notes_by_note_id(scored_notes)
-
-
-
-
-
-    def strip_html(self, text):
-        return note_content.strip_html(text)
-
-
-
-
-
-    def reveal_cloze_for_display(self, text):
-        return note_content.reveal_cloze_for_display(text)
-
-
-
-
-
-    def _simple_stem(self, word):
-        return note_content._simple_stem(word)
-
-
-
-
-
-    def _get_extended_stop_words(self):
-        search_config = (load_config() or {}).get('search_config') or {}
-        return note_content.get_extended_stop_words(search_config)
-
-
-
-
-
-    def _extract_keywords_improved(self, query):
-        return note_content.extract_keywords_for_dialog(self, query, _agent_debug_log)
-
-
-
-
-
-    def _compute_tfidf_scores(self, notes, query_keywords):
-        return note_content.compute_tfidf_scores_for_dialog(self, notes, query_keywords)
-
-
-
-
-
-
-
-    # --- Embedding Search Helpers ---
-
-    def _get_note_embedding(self, note_content, note_id=None):
-        return embedding_helpers._get_note_embedding(self, note_content, note_id)
-
-
-
-
-
-
-
-    def _embedding_search(self, query, notes):
-        return embedding_helpers._embedding_search(self, query, notes)
-
-
-
-
-
-
-
-    # --- Metadata And Context Boosting ---
-
-    def _get_note_metadata(self, note_id):
-        return embedding_helpers._get_note_metadata(self, note_id)
-
-
-
-
-
-
-
-    def _context_aware_boost(self, note, base_score):
-        return embedding_helpers._context_aware_boost(self, note, base_score)
-
-
-
-
-
-
-
-    # --- AI Query Expansion And Relevance Filtering ---
-
-    def _expand_query(self, query, config):
-        return query_enhancement._expand_query(self, query, config)
-
-
-
-
-
-
-
-    def _get_ai_excluded_terms(self, query, search_config):
-        return query_enhancement._get_ai_excluded_terms(self, query, search_config)
-
-
-
-
-
-
-
-    def _generate_hyde_document(self, query, config):
-        return query_enhancement._generate_hyde_document(self, query, config)
-
-
-
-
-
-
-
-    def _passes_focused_balanced_broad(
-        self,
-        matched_keywords,
-        final_score,
-        emb_score,
-        max_emb_score,
-        keywords,
-        search_method,
-        embeddings_available,
-        min_emb_frac=0.25,
-        very_high_emb_frac=0.9,
-    ):
-        return query_enhancement._passes_focused_balanced_broad(
-            self,
-            matched_keywords,
-            final_score,
-            emb_score,
-            max_emb_score,
-            keywords,
-            search_method,
-            embeddings_available,
-            min_emb_frac,
-            very_high_emb_frac,
-        )
-
-
-
-
-
-
-
-
-
-
-
-# ============================================================================
-# Search Worker Compatibility And Standalone Search Helpers
-# ============================================================================
-
-from .search_workers import (
-    MAX_RERANK_COUNT,
-    RRF_K,
-    AskAIWorker,
-    EmbeddingSearchWorker,
-    KeywordFilterContinueWorker,
-    KeywordFilterWorker,
-    RelevanceRerankWorker,
-    RerankCheckWorker,
-    RerankWorker,
-    _do_rerank,
-    _run_embedding_search_sync,
-)
-
-
-
-
-
-
-
-
-
-
-
-# --- Anthropic Prompt Construction ---
-
-# ============================================================================
-# Anthropic Prompt Construction
-# ============================================================================
-
-from .answer_prompts import _build_anthropic_prompt_parts, _normalize_query_space
-
-
-
-
-
-
-
-
-
-
-
-# --- Search Workflow Methods Copied Onto AISearchDialog ---
-
-# ============================================================================
-# Search Workflow Compatibility Import And Wiring
-# ============================================================================
-
-from .search_workflow import AnthropicStreamWorker, configure_search_workflow_globals, install_search_workflow_methods
-
-configure_search_workflow_globals(
-    DIGIT_RE=DIGIT_RE,
-    _agent_debug_log=_agent_debug_log,
-    _session_debug_log=_session_debug_log,
-    get_notes_content_with_col=get_notes_content_with_col,
-    get_safe_config=get_safe_config,
-)
-install_search_workflow_methods(AISearchDialog)
 
 # ============================================================================
 # Search Dialog Singleton And Sidebar Controls
@@ -909,8 +236,23 @@ from .settings_dialog import SettingsDialog
 # Public Dialog Entry Points
 # ============================================================================
 
-def show_search_dialog():
-    return _dialog_entrypoints.show_search_dialog(dialogs_module=sys.modules[__name__])
+def show_search_dialog(
+    initial_query=None,
+    auto_search=False,
+    review_card=None,
+    review_note_id=None,
+    review_context=None,
+    search_mode=None,
+):
+    return _dialog_entrypoints.show_search_dialog(
+        initial_query=initial_query,
+        auto_search=auto_search,
+        review_card=review_card,
+        review_note_id=review_note_id,
+        review_context=review_context,
+        search_mode=search_mode,
+        dialogs_module=sys.modules[__name__],
+    )
 
 
 
@@ -1037,5 +379,3 @@ mw.addonManager.setConfigAction(ADDON_NAME, show_settings_dialog)
 
 
 # Background indexer: re-enabled using QueryOp \u2014 collection access only on main thread via QueryOp; worker thread does API + save only (no mw.col).
-
-

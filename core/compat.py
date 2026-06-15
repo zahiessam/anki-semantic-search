@@ -3,6 +3,66 @@
 import os
 
 
+def _log_exception_text(message):
+    try:
+        from ..utils.log import log_debug
+
+        log_debug(message, is_error=True)
+    except Exception:
+        try:
+            import datetime
+
+            addon_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            log_file = os.path.join(addon_dir, "user_files", "debug_log.txt")
+            os.makedirs(os.path.dirname(log_file), exist_ok=True)
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.datetime.now()}] {message}\n")
+        except Exception:
+            pass
+
+
+def install_safe_exception_hooks():
+    """Log background exceptions without relying on Anki's stderr wrapper."""
+    try:
+        import sys
+        import threading
+        import traceback
+
+        if getattr(sys, "_semantic_search_safe_exception_hooks", False):
+            return
+        sys._semantic_search_safe_exception_hooks = True
+
+        if hasattr(threading, "excepthook"):
+            def _threading_excepthook(args):
+                if args.exc_type is SystemExit:
+                    return
+                thread_name = getattr(args.thread, "name", None) or repr(args.thread)
+                text = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))
+                _log_exception_text(f"Unhandled background thread exception in {thread_name}:\n{text}")
+
+            threading.excepthook = _threading_excepthook
+
+        if hasattr(sys, "unraisablehook"):
+            def _unraisablehook(unraisable):
+                exc_type = getattr(unraisable, "exc_type", None)
+                if exc_type is SystemExit:
+                    return
+                exc_value = getattr(unraisable, "exc_value", None)
+                exc_traceback = getattr(unraisable, "exc_traceback", None)
+                err_msg = getattr(unraisable, "err_msg", None)
+                obj = getattr(unraisable, "object", None)
+                text = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+                _log_exception_text(
+                    "Unhandled unraisable exception"
+                    f"{f' ({err_msg})' if err_msg else ''}"
+                    f" while finalizing {obj!r}:\n{text}"
+                )
+
+            sys.unraisablehook = _unraisablehook
+    except Exception:
+        pass
+
+
 def _patch_colorama_early():
     """Patch colorama ErrorHandler early to prevent transformers import errors."""
     try:

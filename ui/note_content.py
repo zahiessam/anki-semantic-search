@@ -4,21 +4,20 @@
 # Imports
 # ============================================================================
 
-import hashlib
-
 from aqt import mw
 from aqt.qt import QApplication
 
 from ..core.engine import _build_deck_query, get_models_with_fields
 from ..core.keyword_scoring import (
     _simple_stem,
+    apply_intent_boost,
     compute_bm25_scores,
-    compute_tfidf_scores,
     extract_keywords_improved,
+    extract_query_intent,
     get_extended_stop_words,
 )
 from ..utils import get_retrieval_config, load_config, log_debug
-from ..utils.text import clean_html, clean_html_for_display, reveal_cloze, semantic_chunk_text
+from ..utils.text import build_searchable_note_chunks, clean_html, reveal_cloze
 
 
 # ============================================================================
@@ -50,13 +49,11 @@ def get_all_notes_content(dialog):
                 field_name for field_name in field_names if field_name.lower() in global_flds
             ]
 
-    legacy_fields = None
     if not ntf:
         enabled_set = None
         search_all = False
         ntf_fields = {}
         use_first = False
-        legacy_fields = {'text', 'extra'}
         fields_description = "Text & Extra"
     else:
         enabled = ntf.get('enabled_note_types')
@@ -94,12 +91,12 @@ def get_all_notes_content(dialog):
         if search_all:
             indices = list(range(len(flds)))
         else:
-            if legacy_fields is not None:
-                wanted = legacy_fields
-            else:
-                wanted = set(f.lower() for f in (ntf_fields.get(model_name) or []))
-                if not wanted and use_first and flds:
-                    wanted = {flds[0]['name'].lower()}
+            wanted = set(f.lower() for f in (ntf_fields.get(model_name) or []))
+            if not wanted and use_first and flds:
+                wanted = {field['name'].lower() for field in flds[:2]}
+            if not wanted:
+                # Default fallback
+                wanted = {'text', 'extra'}
             indices = [idx for idx, field in enumerate(flds) if field['name'].lower() in wanted]
         if indices:
             model_map[mid] = (model_name, indices)
@@ -115,7 +112,6 @@ def get_all_notes_content(dialog):
         progress.setMaximum(total_notes)
         progress.setValue(0)
 
-    chunk_target = 500
     id_list = ",".join(map(str, note_ids))
     for row_index, (nid, mid, flds_str) in enumerate(
         mw.col.db.execute(f"select id, mid, flds from notes where id in ({id_list})"),
@@ -135,39 +131,30 @@ def get_all_notes_content(dialog):
         if not content_parts:
             continue
 
-        raw_content = " | ".join(content_parts)
-        content = clean_html(raw_content).strip()
-        if not content:
+        searchable = build_searchable_note_chunks(content_parts)
+        if not searchable.get("content"):
             continue
-        display_parts = []
-        for part in content_parts:
-            display_part = clean_html_for_display(part).strip()
-            if display_part:
-                display_parts.append(display_part)
-        display_content = " | ".join(display_parts) or content
-
-        chunks = semantic_chunk_text(content, chunk_target)
+        chunks = searchable.get("chunks") or []
         if len(chunks) <= 1:
-            content_hash = hashlib.md5(content.encode()).hexdigest()
+            chunk = chunks[0]
             notes_data.append({
                 'id': nid,
-                'content': content,
-                'content_hash': content_hash,
+                'content': chunk['content'],
+                'content_hash': chunk['content_hash'],
                 'model': model_name,
-                'display_content': display_content,
+                'display_content': chunk['display_content'],
             })
         else:
-            for chunk_idx, chunk in enumerate(chunks):
-                chunk_hash = hashlib.md5(chunk.encode()).hexdigest()
+            for chunk in chunks:
                 notes_data.append({
                     'id': nid,
-                    'content': chunk,
-                    'content_hash': chunk_hash,
+                    'content': chunk['content'],
+                    'content_hash': chunk['content_hash'],
                     'model': model_name,
-                    'display_content': clean_html_for_display(chunk).strip() or chunk,
-                    'chunk_index': chunk_idx,
-                    '_full_content': content,
-                    '_full_display_content': display_content,
+                    'display_content': chunk['display_content'],
+                    'chunk_index': chunk['chunk_index'],
+                    '_full_content': chunk['_full_content'],
+                    '_full_display_content': chunk['_full_display_content'],
                 })
 
         if progress and row_index % 100 == 0:
@@ -224,6 +211,11 @@ def extract_keywords_for_dialog(dialog, query, agent_debug_log=None):
     ai_excluded = getattr(dialog, '_query_ai_excluded_terms', None) or set()
     if not isinstance(ai_excluded, set):
         ai_excluded = set(ai_excluded) if ai_excluded else set()
+    query_intent = extract_query_intent(query)
+    try:
+        dialog._query_intent = query_intent
+    except Exception:
+        pass
     keywords, stems, phrases = extract_keywords_improved(query, search_config, ai_excluded)
 
     try:
@@ -241,17 +233,59 @@ def extract_keywords_for_dialog(dialog, query, agent_debug_log=None):
     return keywords, stems, phrases
 
 
-def compute_tfidf_scores_for_dialog(dialog, notes, query_keywords):
-    config = load_config()
-    retrieval = get_retrieval_config(config)
-    method = retrieval.get("keyword_scoring_method", "tfidf")
-    if method == "bm25":
-        scores, high_freq_keywords = compute_bm25_scores(notes, query_keywords)
-    else:
-        scores, high_freq_keywords = compute_tfidf_scores(notes, query_keywords)
+def apply_query_intent_boost_for_dialog(dialog, content, anchor_keywords=None):
+    query_intent = getattr(dialog, '_query_intent', None)
+    return apply_intent_boost(content, query_intent, anchor_keywords)
+
+
+def compute_bm25_scores_for_dialog(dialog, notes, query_keywords):
+    scores, high_freq_keywords = compute_bm25_scores(notes, query_keywords)
     try:
         dialog._query_high_freq_keywords = high_freq_keywords
-        dialog._query_keyword_scoring_method = method
+        dialog._query_keyword_scoring_method = "bm25"
     except Exception:
         pass
     return scores
+
+
+class SearchNoteContentMixin:
+    """Owns note loading and text-scoring helper methods used by the dialog."""
+
+    get_all_notes_content = get_all_notes_content
+    _aggregate_scored_notes_by_note_id = staticmethod(aggregate_scored_notes_by_note_id)
+    strip_html = staticmethod(strip_html)
+    reveal_cloze_for_display = staticmethod(reveal_cloze_for_display)
+    _simple_stem = staticmethod(_simple_stem)
+
+    def _get_extended_stop_words(self):
+        cached = getattr(self, "_cached_extended_stop_words", None)
+        if cached is not None:
+            return cached
+        search_config = (load_config() or {}).get('search_config') or {}
+        stop_words = get_extended_stop_words(search_config)
+        try:
+            self._cached_extended_stop_words = stop_words
+        except Exception:
+            pass
+        return stop_words
+
+    def _extract_keywords_improved(self, query):
+        cache_key = (
+            query or "",
+            tuple(sorted(getattr(self, "_query_ai_excluded_terms", None) or [])),
+        )
+        cached = getattr(self, "_cached_extracted_keywords", None)
+        if cached and cached.get("key") == cache_key:
+            return cached.get("value")
+
+        from .search_dialog_shared import _agent_debug_log
+
+        value = extract_keywords_for_dialog(self, query, _agent_debug_log)
+        try:
+            self._cached_extracted_keywords = {"key": cache_key, "value": value}
+        except Exception:
+            pass
+        return value
+
+    def _compute_bm25_scores(self, notes, query_keywords):
+        return compute_bm25_scores_for_dialog(self, notes, query_keywords)

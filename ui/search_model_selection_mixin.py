@@ -6,7 +6,7 @@ class SearchModelSelectionMixin:
 
     def get_best_model(self, provider):
         models = {
-            'anthropic': 'claude-sonnet-4-20250514',
+            'anthropic': 'claude-sonnet-4-6',
             'openai': 'gpt-4o-mini',
             'google': 'gemini-1.5-flash',
             'openrouter': 'google/gemini-flash-1.5',

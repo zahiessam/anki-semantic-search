@@ -68,7 +68,32 @@ def load_search_history(query):
     return None
 
 
-def save_search_history(query, answer, relevant_note_ids, scored_notes, context_note_ids):
+def delete_search_history(query):
+    query_key = _normalize_query(query)
+    if not query_key:
+        return False
+
+    data = _load_history_blob()
+    searches = data.get("searches", [])
+    filtered = [
+        entry for entry in searches
+        if not isinstance(entry, dict) or entry.get("query_key") != query_key
+    ]
+    if len(filtered) == len(searches):
+        return False
+
+    return _save_history_blob({"searches": filtered})
+
+
+def save_search_history(
+    query,
+    answer,
+    relevant_note_ids,
+    scored_notes,
+    context_note_ids,
+    context_note_id_and_chunk=None,
+    context_note_identity_keys=None,
+):
     query_text = (query or "").strip()
     query_key = _normalize_query(query_text)
     if not query_key:
@@ -89,6 +114,8 @@ def save_search_history(query, answer, relevant_note_ids, scored_notes, context_
             {
                 "id": note_id,
                 "content": note.get("content", ""),
+                "chunk_index": note.get("chunk_index"),
+                "content_hash": note.get("content_hash"),
             },
         ))
 
@@ -98,6 +125,14 @@ def save_search_history(query, answer, relevant_note_ids, scored_notes, context_
         "answer": answer or "",
         "relevant_note_ids": list(relevant_note_ids or []),
         "context_note_ids": list(context_note_ids or []),
+        "context_note_id_and_chunk": [
+            [note_id, chunk_index]
+            for note_id, chunk_index in (context_note_id_and_chunk or [])
+        ],
+        "context_note_identity_keys": [
+            [note_id, chunk_index, content_hash]
+            for note_id, chunk_index, content_hash in (context_note_identity_keys or [])
+        ],
         "scored_notes": compact_scored,
         "timestamp": datetime.datetime.now().isoformat(),
     })

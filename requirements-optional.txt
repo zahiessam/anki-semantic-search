@@ -9,3 +9,7 @@ anthropic>=0.39.0
 # Optional: For spell check in the search box (underline misspellings, right-click suggestions)
 # Install with: pip install pyspellchecker
 pyspellchecker>=0.8.0
+
+# Optional: For faster semantic search on large embedding indexes
+# Install into Anki's Python with: "<anki-python>" -m pip install numpy
+numpy>=1.26.0

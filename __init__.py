@@ -1,9 +1,14 @@
 # Anki Semantic Search Addon Entry Point
 
+import sys
+
 from aqt import gui_hooks, mw
 from aqt.qt import QTimer
 
 from .utils import log_debug
+from .core.compat import install_safe_exception_hooks
+
+install_safe_exception_hooks()
 
 try:
     from .ui.sidebar_bootstrap import (
@@ -21,6 +26,7 @@ except Exception as exc:
 def initialize_addons() -> None:
     """Load addon UI bootstrap and register main-window hooks."""
     log_debug("Semantic Search Addon: Initializing...")
+    log_debug(f"Semantic Search Addon: sys.executable={sys.executable}")
 
 
 def _on_main_window_did_init() -> None:

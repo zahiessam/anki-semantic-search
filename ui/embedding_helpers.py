@@ -12,6 +12,7 @@ from aqt.qt import QApplication
 
 from ..core.engine import get_embedding_for_query, load_embedding
 from ..utils import load_config, log_debug
+from ..utils.text import build_searchable_note_chunks
 
 
 # ============================================================================
@@ -259,10 +260,7 @@ def _get_note_embedding(self, note_content, note_id=None):
 
 
             if not wanted and use_first and flds:
-
-
-
-                wanted = {flds[0]["name"].lower()}
+                wanted = {field["name"].lower() for field in flds[:2]}
 
 
 
@@ -299,22 +297,16 @@ def _get_note_embedding(self, note_content, note_id=None):
 
 
         content_parts = [note.fields[i] for i in indices]
-
-
-
-
-
-
-
-        # This mirrors the generator: join with spaces and *do not* strip HTML.
-
-
-
-        generation_content = " ".join(content_parts)
-
-
-
-        content_hash = hashlib.md5(generation_content.encode()).hexdigest()
+        searchable = build_searchable_note_chunks(content_parts)
+        content_hash = None
+        for chunk in searchable.get("chunks") or []:
+            if chunk.get("content") == note_content or chunk.get("content_hash") == ui_hash:
+                content_hash = chunk.get("content_hash")
+                break
+        if content_hash is None and searchable.get("chunks"):
+            content_hash = searchable["chunks"][0].get("content_hash")
+        if content_hash is None:
+            content_hash = ui_hash
 
 
 
@@ -859,3 +851,12 @@ def _context_aware_boost(self, note, base_score, selected_note_ids=None):
 
 
     return base_score * boost
+
+
+class SearchEmbeddingHelpersMixin:
+    """Owns embedding lookup, semantic search, metadata, and context boosting."""
+
+    _get_note_embedding = _get_note_embedding
+    _embedding_search = _embedding_search
+    _get_note_metadata = _get_note_metadata
+    _context_aware_boost = _context_aware_boost

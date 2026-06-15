@@ -7,7 +7,7 @@ Install sentence-transformers in that Python: pip install sentence-transformers
 import sys
 import json
 
-DEFAULT_RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L6-v2"
+DEFAULT_RERANK_MODEL = "NeuML/biomedbert-base-reranker"
 _MODEL_CACHE = {}
 
 

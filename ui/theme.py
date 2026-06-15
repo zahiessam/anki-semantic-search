@@ -69,26 +69,30 @@ def get_addon_theme(is_dark=None):
         app_bg = _blend(window, black, 0.10)
         panel_bg = _blend(app_bg, white, 0.08)
         section_bg = _blend(app_bg, white, 0.045)
-        section_header_bg = _blend(app_bg, white, 0.18)
-        section_header_checked = _blend(app_bg, white, 0.23)
-        control_bg = _blend(app_bg, white, 0.145)
+        section_header_bg = _blend(app_bg, white, 0.14)
+        section_header_checked = _blend(app_bg, white, 0.19)
+        control_bg = _blend(app_bg, white, 0.19)
+        control_button_bg = _blend(control_bg, white, 0.08)
+        control_disabled_bg = _blend(app_bg, white, 0.07)
         field_row_bg = _blend(app_bg, black, 0.12)
         field_row_hover_bg = _blend(field_row_bg, white, 0.07)
     else:
         app_bg = window
         panel_bg = _blend(app_bg, black, 0.07)
         section_bg = _blend(app_bg, black, 0.11)
-        section_header_bg = _blend(app_bg, black, 0.08)
-        section_header_checked = _blend(app_bg, black, 0.13)
-        control_bg = _blend(base, white, 0.72)
+        section_header_bg = _blend(app_bg, black, 0.06)
+        section_header_checked = _blend(app_bg, black, 0.10)
+        control_bg = _blend(base, white, 0.86)
+        control_button_bg = _blend(control_bg, black, 0.045)
+        control_disabled_bg = _blend(app_bg, black, 0.05)
         field_row_bg = _blend(base, black, 0.04)
         field_row_hover_bg = _blend(field_row_bg, black, 0.06)
 
     checkbox_unchecked_bg = control_bg
     checkbox_checked_bg = accent
-    control_border = _blend(app_bg, white, 0.32) if is_dark else _blend(app_bg, black, 0.26)
+    control_border = _blend(app_bg, white, 0.42) if is_dark else _blend(app_bg, black, 0.34)
     field_row_border = _blend(app_bg, white, 0.22) if is_dark else _blend(control_border, app_bg, 0.25)
-    control_hover_border = _blend(control_border, white if is_dark else black, 0.28)
+    control_hover_border = _blend(control_border, white if is_dark else black, 0.38)
     panel_border = _blend(app_bg, white if is_dark else black, 0.26)
     subtle_border = _blend(app_bg, white if is_dark else black, 0.18)
     subtext = _blend(text, app_bg, 0.24 if is_dark else 0.35)
@@ -110,6 +114,8 @@ def get_addon_theme(is_dark=None):
         "subtext": _hex(subtext),
         "input_bg": _hex(base),
         "control_bg": _hex(control_bg),
+        "control_button_bg": _hex(control_button_bg),
+        "control_disabled_bg": _hex(control_disabled_bg),
         "field_row_bg": _hex(field_row_bg),
         "field_row_hover_bg": _hex(field_row_hover_bg),
         "field_row_border": _hex(field_row_border),
@@ -160,6 +166,16 @@ def get_addon_theme(is_dark=None):
         "quiet_text": _hex(quiet_text),
         "warn_bg": _rgba(warn, 0.12),
         "warn_text": _hex(warn),
+        "settings_page_min_width": 760,
+        "settings_page_max_width": 1100,
+        "settings_page_margin": 20,
+        "settings_page_spacing": 14,
+        "settings_section_spacing": 8,
+        "settings_row_label_width": 150,
+        "settings_row_label_max_width": 210,
+        "settings_action_max_width": 260,
+        "settings_inline_action_max_width": 120,
+        "settings_radius": 6,
     }
 
 
@@ -233,8 +249,13 @@ def settings_dialog_stylesheet(theme):
         QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{
             border: 1px solid {theme['focus_border']};
         }}
+        QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled {{
+            background-color: {theme['control_disabled_bg']};
+            color: {theme['quiet_text']};
+            border-color: {theme['subtle_border']};
+        }}
         QPushButton {{
-            padding: 8px 14px;
+            padding: 7px 12px;
             border-radius: 6px;
             font-weight: bold;
             font-size: 12px;
@@ -247,7 +268,7 @@ def settings_dialog_stylesheet(theme):
         QPushButton#cancelBtn:hover {{ background-color: {theme['muted_btn_hover']}; }}
         QComboBox {{
             min-height: 20px;
-            padding: 6px 8px;
+            padding: 6px 32px 6px 9px;
             border: 1px solid {theme['control_border']};
             border-radius: 6px;
             background-color: {theme['control_bg']};
@@ -255,6 +276,11 @@ def settings_dialog_stylesheet(theme):
         }}
         QComboBox:hover {{ background-color: {theme['control_bg']}; border-color: {theme['control_hover_border']}; }}
         QComboBox:focus {{ border: 1px solid {theme['focus_border']}; }}
+        QComboBox:disabled {{
+            background-color: {theme['control_disabled_bg']};
+            color: {theme['quiet_text']};
+            border-color: {theme['subtle_border']};
+        }}
         QComboBox QAbstractItemView {{
             background-color: {theme['control_bg']};
             color: {theme['input_text']};
@@ -263,18 +289,29 @@ def settings_dialog_stylesheet(theme):
             border: 1px solid {theme['control_border']};
         }}
         QComboBox::drop-down {{
-            background-color: {theme['control_bg']};
+            background-color: {theme['control_button_bg']};
             border-left: 1px solid {theme['control_border']};
             border-top-right-radius: 6px;
             border-bottom-right-radius: 6px;
+            subcontrol-origin: padding;
+            subcontrol-position: top right;
+            width: 26px;
+        }}
+        QComboBox::drop-down:hover {{
+            background-color: {theme['section_header_checked']};
+            border-left-color: {theme['control_hover_border']};
+        }}
+        QComboBox::drop-down:disabled {{
+            background-color: {theme['control_disabled_bg']};
+            border-left: 1px solid {theme['subtle_border']};
         }}
         QGroupBox {{
             font-weight: bold;
-            border: 1px solid {theme['panel_border']};
+            border: 1px solid {theme['subtle_border']};
             border-radius: 5px;
             margin-top: 10px;
-            padding: 16px 8px 8px 8px;
-            background-color: {theme['section_bg']};
+            padding: 14px 8px 8px 8px;
+            background-color: {theme['panel_bg']};
             color: {theme['text']};
         }}
         QGroupBox::title {{
@@ -282,30 +319,54 @@ def settings_dialog_stylesheet(theme):
             subcontrol-position: top left;
             left: 10px;
             padding: 0 4px;
-            background-color: {theme['section_bg']};
+            background-color: {theme['panel_bg']};
             color: {theme['text']};
         }}
         QGroupBox:disabled {{ color: {theme['subtext']}; border-color: {theme['panel_border']}; }}
         QSpinBox {{
             min-height: 20px;
-            padding: 6px 8px;
+            padding: 6px 32px 6px 9px;
             border: 1px solid {theme['control_border']};
-            border-radius: 4px;
+            border-radius: 6px;
             background-color: {theme['control_bg']};
             color: {theme['input_text']};
             max-width: 160px;
         }}
         QSpinBox:hover {{ border-color: {theme['control_hover_border']}; }}
         QSpinBox:focus {{ border: 1px solid {theme['focus_border']}; }}
+        QSpinBox:disabled {{
+            background-color: {theme['control_disabled_bg']};
+            color: {theme['quiet_text']};
+            border-color: {theme['subtle_border']};
+        }}
         QSpinBox::up-button, QSpinBox::down-button {{
-            background-color: {theme['control_bg']};
+            background-color: {theme['control_button_bg']};
             border-left: 1px solid {theme['control_border']};
+            subcontrol-origin: border;
+            width: 24px;
+        }}
+        QSpinBox::up-button {{
+            subcontrol-position: top right;
+            border-top-right-radius: 6px;
+            border-bottom: 1px solid {theme['control_border']};
+        }}
+        QSpinBox::down-button {{
+            subcontrol-position: bottom right;
+            border-bottom-right-radius: 6px;
+        }}
+        QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
+            background-color: {theme['section_header_checked']};
+            border-left-color: {theme['control_hover_border']};
+        }}
+        QSpinBox::up-button:disabled, QSpinBox::down-button:disabled {{
+            background-color: {theme['control_disabled_bg']};
+            border-left-color: {theme['subtle_border']};
         }}
         QTabWidget::pane {{ border: 1px solid {theme['subtle_border']}; background-color: {theme['bg']}; }}
         QTabBar::tab {{
             background-color: {theme['tab_bg']};
             color: {theme['tab_text']};
-            padding: 9px 18px;
+            padding: 6px 13px;
             border: 1px solid {theme['subtle_border']};
             border-top-left-radius: 4px;
             border-top-right-radius: 4px;
@@ -322,8 +383,8 @@ def settings_dialog_stylesheet(theme):
             border-color: {theme['tab_selected_bg']};
         }}
         QCheckBox {{
-            spacing: 8px;
-            padding: 4px 6px;
+            spacing: 6px;
+            padding: 2px 4px;
             border-radius: 4px;
         }}
         QCheckBox:hover {{ background-color: {theme['panel_bg']}; }}
@@ -393,6 +454,16 @@ def settings_field_row_stylesheet(theme):
         QFrame#settingsFieldRow:disabled {{
             color: {theme['subtext']};
             border-color: {theme['subtle_border']};
+            background-color: {theme['section_bg']};
+        }}
+        QFrame#settingsFieldRow:disabled QLabel,
+        QFrame#settingsFieldRow:disabled QCheckBox {{
+            color: {theme['quiet_text']};
+            background-color: transparent;
+        }}
+        QFrame#settingsFieldRow:disabled:hover {{
+            background-color: {theme['section_bg']};
+            border-color: {theme['subtle_border']};
         }}
     """
 
@@ -403,7 +474,7 @@ def collapsible_section_button_stylesheet(theme):
             text-align: left;
             font-weight: bold;
             font-size: 14px;
-            padding: 11px 16px;
+            padding: 8px 12px;
             background-color: {theme['section_header_bg']};
             color: {theme['text']};
             border: 1px solid {theme['panel_border']};
@@ -425,7 +496,7 @@ def collapsible_section_button_stylesheet(theme):
 
 def collapsible_section_content_stylesheet(theme):
     return f"""
-        QWidget {{
+        QWidget#collapsibleSectionContent {{
             background-color: {theme['section_bg']};
             border: 1px solid {theme['panel_border']};
             border-top: none;
@@ -448,7 +519,7 @@ def settings_button_style(theme, variant="muted"):
     return (
         "QPushButton { "
         f"background-color: {theme[bg_key]}; color: {theme[text_key]}; "
-        f"padding: 8px; font-weight: bold; border: 1px solid {theme[border_key]}; "
+        f"padding: 7px 10px; font-weight: bold; border: 1px solid {theme[border_key]}; "
         "} "
         f"QPushButton:hover {{ background-color: {theme[hover_key]}; }}"
     )
@@ -465,7 +536,7 @@ def settings_status_label_style(theme, state="info"):
     }
     color = colors.get(state, theme["accent"])
     return (
-        f"padding: 10px; border: 1px solid {color}; border-radius: 4px; "
+        f"padding: 6px 8px; border: none; border-radius: 4px; "
         f"background: {theme['panel_bg']}; color: {color}; font-weight: bold;"
     )
 
@@ -485,7 +556,7 @@ def settings_text_style(theme, role="body"):
 
 def settings_panel_style(theme, variant="panel"):
     if variant == "warning":
-        return f"font-size: 11px; color: {theme['warn_text']}; margin-bottom: 10px; padding: 8px; background-color: {theme['warn_bg']}; border-radius: 4px;"
+        return f"font-size: 11px; color: {theme['warn_text']}; margin-bottom: 10px; padding: 8px; background-color: {theme['warn_bg']}; border: none; border-radius: 4px;"
     if variant == "index":
-        return f"QFrame {{ background-color: {theme['section_bg']}; border-radius: 8px; border: 1px solid {theme['accent']}; }}"
-    return f"background-color: {theme['panel_bg']}; color: {theme['text']}; padding: 10px; border: 1px solid {theme['panel_border']}; border-radius: 5px;"
+        return f"QFrame {{ background-color: {theme['panel_bg']}; border-radius: 6px; border: 1px solid {theme['subtle_border']}; }}"
+    return f"background-color: {theme['panel_bg']}; color: {theme['text']}; padding: 8px; border: 1px solid {theme['subtle_border']}; border-radius: 5px;"

@@ -16,10 +16,61 @@ from aqt.utils import showInfo, tooltip
 from ..core.compat import _ensure_stderr_patched, _patch_colorama_early
 from ..utils.log import log_debug
 
+_numpy_guidance_shown = False
+
 
 # ============================================================================
 # Dependency Detection And Installation Helpers
 # ============================================================================
+
+def is_numpy_available():
+    """Return True when NumPy imports in Anki's active Python environment."""
+    try:
+        import numpy  # noqa: F401
+
+        return True
+    except Exception as exc:
+        log_debug(f"NumPy unavailable in Anki Python ({sys.executable}): {exc}")
+        return False
+
+
+def get_numpy_install_command():
+    """Return the manual pip command for the current Anki Python."""
+    return f'"{sys.executable}" -m pip install numpy'
+
+
+def show_numpy_install_guidance(parent=None, reason=None, force=False):
+    """Show one per-session NumPy guidance dialog with a copyable command."""
+    global _numpy_guidance_shown
+
+    if _numpy_guidance_shown and not force:
+        return False
+    _numpy_guidance_shown = True
+
+    target_python = sys.executable
+    pip_cmd = get_numpy_install_command()
+    msg = (
+        (reason or "NumPy is missing from Anki's Python; semantic search will use a slower fallback.")
+        + "\n\n"
+        f"Anki Python executable:\n{target_python}\n\n"
+        "Install NumPy into Anki's Python with this command:\n\n"
+        f"  {pip_cmd}\n\n"
+        "Installing NumPy into your normal system Python does not make it available inside Anki. "
+        "After installing, fully restart Anki."
+    )
+
+    dlg = QMessageBox(parent or mw)
+    dlg.setWindowTitle("Optional Speedup: NumPy")
+    dlg.setText(msg)
+    dlg.setIcon(QMessageBox.Icon.Information)
+    copy_btn = dlg.addButton("Copy command", QMessageBox.ButtonRole.ActionRole)
+    dlg.addButton(QMessageBox.StandardButton.Ok)
+    dlg.exec()
+
+    if dlg.clickedButton() == copy_btn:
+        QApplication.clipboard().setText(pip_cmd)
+        tooltip("Command copied to clipboard")
+    return True
 
 def check_vc_redistributables():
 

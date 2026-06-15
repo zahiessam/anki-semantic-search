@@ -2,6 +2,7 @@ import json
 import urllib.request
 import urllib.error
 from .utils.log import log_debug
+from .utils.anthropic_response import extract_anthropic_text
 
 class LLMProvider:
     def generate(self, payload):
@@ -40,7 +41,7 @@ class OpenAICompatibleProvider(LLMProvider):
 class AnthropicProvider(LLMProvider):
     def __init__(self, api_key, model=None):
         self.api_key = api_key
-        self.model = model or "claude-3-5-sonnet-20241022"
+        self.model = model or "claude-sonnet-4-6"
 
     def generate(self, payload):
         url = "https://api.anthropic.com/v1/messages"
@@ -70,7 +71,7 @@ class AnthropicProvider(LLMProvider):
         req = urllib.request.Request(url, data=data, headers=headers)
         with urllib.request.urlopen(req, timeout=60) as response:
             res = json.loads(response.read().decode("utf-8"))
-            return res["content"][0]["text"]
+            return extract_anthropic_text(res, source="Anthropic provider")
 
 class OllamaProvider(LLMProvider):
     """Direct Ollama API (non-OpenAI path)."""

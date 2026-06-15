@@ -1,16 +1,55 @@
 """Progress/status helpers for the AI search dialog."""
 
+import time
+
 from aqt.qt import QTimer
 
 
 class SearchProgressMixin:
     """Owns search progress bar, progress label, and estimated timer helpers."""
 
+    def _set_search_stage(self, message, chat_message=None, progress=None):
+        """Update runtime search status without committing ordinary stage text to chat history."""
+        try:
+            message = (message or "").strip()
+            chat_message = message if chat_message is True else chat_message
+            if hasattr(self, "isMinimized") and self.isMinimized():
+                self._last_progress_message = message
+                return
+            if message and hasattr(self, "status_label") and self.status_label:
+                self.status_label.setText(message)
+            if chat_message and hasattr(self, "_set_chat_transient"):
+                self._set_chat_transient(chat_message, mode="info")
+            if progress is not None:
+                self._show_centile_progress(message, progress)
+        except Exception:
+            pass
+
     def _on_embedding_search_progress(self, current, total, message):
         """Update status and progress bar while embedding search runs in background."""
         try:
+            now = time.monotonic()
+            last = float(getattr(self, "_last_progress_ui_update", 0.0) or 0.0)
+            if current != total and now - last < 0.35:
+                return
+            self._last_progress_ui_update = now
+
+            display_message = message
+            lower_message = (message or "").lower()
+            if "combining" in lower_message:
+                display_message = f"Combining keyword + semantic matches... {current}/{total}"
+            elif "embedding search" in lower_message or "search" in lower_message:
+                display_message = f"Searching notes with Hybrid retrieval... {current}/{total}"
+
+            if hasattr(self, "isMinimized") and self.isMinimized():
+                self._last_progress_message = display_message
+                return
+
             if hasattr(self, 'status_label') and self.status_label:
-                self.status_label.setText(message)
+                self.status_label.setText(display_message)
+
+            if hasattr(self, "_set_chat_transient"):
+                self._set_chat_transient(display_message, mode="info")
 
             if hasattr(self, 'search_progress_bar') and self.search_progress_bar and total > 0:
                 self.search_progress_bar.setRange(0, total)
@@ -30,6 +69,10 @@ class SearchProgressMixin:
 
     def _show_centile_progress(self, message="", percent=0):
         """Show 0-100% progress bar and label. Use for estimated or real progress during long operations."""
+        self._last_progress_message = message
+        if hasattr(self, "isMinimized") and self.isMinimized():
+            return
+
         if hasattr(self, 'search_progress_bar') and self.search_progress_bar:
             self.search_progress_bar.setRange(0, 100)
             self.search_progress_bar.setValue(max(0, min(100, round(percent))))
@@ -38,8 +81,6 @@ class SearchProgressMixin:
         if hasattr(self, 'search_progress_label') and self.search_progress_label:
             self.search_progress_label.setText(message)
             self.search_progress_label.setVisible(True)
-
-        self._last_progress_message = message
 
     def _start_estimated_progress_timer(self, duration_sec, start_pct=5, end_pct=95):
         """Advance progress bar from start_pct to end_pct over duration_sec (est. wait). Call _stop_estimated_progress_timer when done."""

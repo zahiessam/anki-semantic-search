@@ -15,6 +15,8 @@ Anki Semantic Search lets you search your Anki notes semantically and get AI-gen
 
 **Local options:** If you use **Ollama** for both embeddings and answers, no data leaves your machine.
 
+**Local Memory:** The add-on can store compact snippets from final answer context in `user_files/agent_memory.db`. These snippets are used only for future retrieval planning and are never treated as citable answer notes. If hybrid memory retrieval is enabled with a cloud embedding provider, memory snippets may be sent to that provider for embeddings.
+
 **Preview payload:** In the Settings dialog, use the "Preview payload" or similar option to see exactly what would be sent before running a search.
 
 ---
@@ -93,3 +95,30 @@ For local OpenAI-compatible servers such as LM Studio, set:
 ```
 
 inside `search_config` to match the model's loaded context length. The add-on uses this as an upper budget and automatically sends less context for simple questions and more context for complex, multi-note questions.
+
+### Relevance threshold
+
+The user-facing result cutoff is:
+
+```json
+"relevance_threshold_percent": 65
+```
+
+This value is clamped to `0..80`. It controls both visible search rows and which ordinary notes are eligible for AI answer context. Retrieval keeps a hidden low internal floor so reranking still receives enough candidates.
+
+### Local memory settings
+
+Relevant `search_config` keys:
+
+```json
+"enable_profile_memory": true,
+"memory_retrieval_mode": "auto_hybrid",
+"memory_retention_days": 30,
+"memory_max_saved_snippets_per_search": 24,
+"memory_max_retrieved_snippets": 5,
+"memory_embedding_enabled": true,
+"agentic_max_retrieval_passes": 3,
+"agentic_max_subqueries": 6
+```
+
+`memory_retrieval_mode` can be `text` or `auto_hybrid`. New installs default to `auto_hybrid`; text mode remains available for local SQLite scoring only. Auto hybrid uses memory embeddings when available and falls back to text mode if embedding fails, times out, or is stale.
