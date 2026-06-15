@@ -7,7 +7,7 @@ import time
 
 from aqt.qt import QThread, pyqtSignal
 
-from .dependency_install import _resolve_external_python_exe
+from .dependency_install import _is_real_python_executable, _resolve_external_python_exe
 
 
 class RerankModelDownloadWorker(QThread):
@@ -22,8 +22,8 @@ class RerankModelDownloadWorker(QThread):
         self.model_name = model_name
 
     def run(self):
-        python_exe = _resolve_external_python_exe(self.python_path) if self.python_path else sys.executable
-        if not python_exe:
+        python_exe = _resolve_external_python_exe(self.python_path) if self.python_path else None
+        if not python_exe or not _is_real_python_executable(python_exe):
             self.finished_signal.emit(False, "Select a valid Python first.")
             return
 
@@ -171,8 +171,8 @@ class RerankModelVerifyWorker(QThread):
         self.model_name = model_name
 
     def run(self):
-        python_exe = _resolve_external_python_exe(self.python_path) if self.python_path else sys.executable
-        if not python_exe:
+        python_exe = _resolve_external_python_exe(self.python_path) if self.python_path else None
+        if not python_exe or not _is_real_python_executable(python_exe):
             self.finished_signal.emit(False, self.model_name, "Select a valid Python first.")
             return
 

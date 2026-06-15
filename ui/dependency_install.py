@@ -19,6 +19,16 @@ from ..utils.log import log_debug
 _numpy_guidance_shown = False
 
 
+def _is_real_python_executable(path):
+    """Return True when path looks like a Python interpreter, not Anki.exe."""
+    if not path:
+        return False
+    base = os.path.basename(str(path)).lower()
+    if base in {"anki.exe", "anki-console.exe"}:
+        return False
+    return base.startswith("python") or base in {"py.exe", "pypy.exe"}
+
+
 # ============================================================================
 # Dependency Detection And Installation Helpers
 # ============================================================================
@@ -1870,6 +1880,12 @@ def fix_pytorch_dll_issue():
 
 
 
+        if not _is_real_python_executable(sys.executable):
+            return False
+
+        if not _is_real_python_executable(sys.executable):
+            return False
+
         result = subprocess.run(
 
 
@@ -1953,6 +1969,13 @@ def fix_pytorch_dll_issue():
 
 
 
+
+        if not _is_real_python_executable(target_python):
+            showInfo(
+                "Anki's executable is not a standalone python.exe on this system.\n\n"
+                "To use Cross-Encoder reranking, choose an external Python path in Settings."
+            )
+            return
 
         result = subprocess.run(
 

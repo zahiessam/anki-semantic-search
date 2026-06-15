@@ -13,6 +13,16 @@ import sys
 from aqt.qt import QThread, pyqtSignal, QApplication
 from aqt import mw
 
+
+def _is_real_python_executable(path):
+    if not path:
+        return False
+    base = os.path.basename(str(path)).lower()
+    if base in {"anki.exe", "anki-console.exe"}:
+        return False
+    return base.startswith("python") or base in {"py.exe", "pypy.exe"}
+
+
 from .engine import (
     get_embedding_for_query,
     get_embeddings_batch,
@@ -120,8 +130,14 @@ class RerankCheckWorker(QThread):
                 if os.path.isdir(p):
                     exe = os.path.join(p, "python.exe") if os.name == 'nt' else os.path.join(p, "python")
                     p = exe if os.path.isfile(exe) else p
+                if not _is_real_python_executable(p):
+                    self.finished_signal.emit(False)
+                    return
                 result = subprocess.run([p, "-c", "from sentence_transformers import CrossEncoder; print('ok')"], capture_output=True, text=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
                 self.finished_signal.emit(result.returncode == 0 and 'ok' in result.stdout)
+                return
+            if not _is_real_python_executable(sys.executable):
+                self.finished_signal.emit(False)
                 return
             result = subprocess.run([sys.executable, "-c", "from sentence_transformers import CrossEncoder; print('ok')"], capture_output=True, text=True, timeout=15, creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
             self.finished_signal.emit(result.returncode == 0 and 'ok' in result.stdout)

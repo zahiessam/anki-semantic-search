@@ -23,7 +23,7 @@ from aqt import dialogs, mw
 from aqt.qt import *
 from aqt.utils import showInfo, showText, tooltip
 
-from .dependency_install import _resolve_external_python_exe, install_dependencies
+from .dependency_install import _is_real_python_executable, _resolve_external_python_exe, install_dependencies
 from .settings_constants import (
     ANSWER_CLOUD_PROVIDERS,
     ANSWER_KEY_PROVIDER_PREFIXES,
@@ -262,6 +262,12 @@ class SettingsRerankEnvironmentMixin:
 
                     return False
 
+                if not _is_real_python_executable(python_path):
+
+
+
+                    return False
+
 
 
                 result = subprocess.run(
@@ -333,6 +339,14 @@ class SettingsRerankEnvironmentMixin:
 
 
                 check_script = "from sentence_transformers import CrossEncoder; print('ok')"
+
+
+
+            if not _is_real_python_executable(sys.executable):
+
+
+
+                return False
 
 
 
